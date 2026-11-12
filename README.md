@@ -14,99 +14,57 @@
 
 Zfilm lets your coding agent make videos, and lets you edit them.
 
-Ask Codex, Claude Code or any coding agent to make a film. It writes the film as web pages, and Studio, a local
+Ask Claude Code, Codex or any coding agent to make a film. It writes the film as web pages, and Studio, a local
 editor that runs in your browser, shows it taking shape. Then change anything you like, by hand or by asking.
 
 - **One HTML file.** `film.html` cuts animated web pages, footage, pictures and sound together on tracks, styled
   with CSS. Nothing new to learn: your agent already knows the web.
 - **One function.** Each shot is a web page that draws any moment with `frame(t)`, using anything a browser can
-  draw: three.js, WebGL, canvas, SVG, CSS, GSAP, video and more. No framework (like Remotion or HyperFrames): one
-  function is enough.
+  draw: three.js, WebGL, canvas, SVG, CSS, GSAP, video and more. No framework: one function is enough.
 - **One real editor.** Move, scale and rotate any element inside a page, change its text, color and style; place,
   crop and restyle every clip, trim and cut them on the timeline.
 
-<p align="center"><img src="docs/openfilm.webp" alt="An agent makes a film with Zfilm; it is then changed by hand in Studio" width="900"><br>
-<sub>▶ <a href="https://www.youtube.com/watch?v=Qea7v6dtNM0">Watch the 1:42 launch video</a>, made with Zfilm from start to finish.</sub></p>
+## This repository
+
+This is a self-built branch of [OpenFilm](https://github.com/openfilm/openfilm), forked at upstream `v0.3.2`
+(`758b1a3`) and now at **0.3.6**. It is not the upstream project and has no affiliation with it. Upstream's issues,
+pull requests and releases belong upstream; this one keeps its own.
+
+What this branch changes, in short:
+
+- **Named Zfilm** everywhere a person sees it: the window, Studio, the chat, the installer, the icons. The CLI and
+  the npm package are still `openfilm`, and `zfilm` works as an alias.
+- **No update mechanism.** No version check, no feed, no background download, no "restart to update". A new version
+  is a new build installed over the old one.
+- **No hosted service.** The account, the hosted agent and the hosted provider are gone. Media services are
+  connected with your own keys, in Studio's Settings → Services.
+- **The media library can be downloaded whole** and used offline, managed in Settings → Library: progress per
+  part, pause, resume, clear.
+- **A folder can be imported** into the managed library: the originals stay where they are, copies are catalogued,
+  and the agent you have selected describes each file.
+- **Local transcription** (whisper-small, WASM, no network) for material that has speech.
+- **Windows fixes**: switching project tabs no longer throws you back to the project list on a slow load, 4K
+  exports fall back through hardware encoders to software instead of stalling, and the desktop app builds and
+  packages on Windows.
+
+[SELF-CHANGELOG.md](SELF-CHANGELOG.md) is the ledger: every change, why it was made, what was measured, and what
+is still open. It is written in Chinese.
 
 ## Install
 
-Requires Node 22.2+ and ffmpeg, on macOS, Windows or Linux (git too, for Studio's saved versions); the first run
-downloads a headless Chromium (about 100 MB).
+The Windows installer is in [Releases](https://github.com/fivif/zfilm/releases):
 
-```sh
-npx skills add openfilm/openfilm
+```
+Zfilm-Setup-0.3.6-x64.exe   NSIS, x64, about 316 MB
 ```
 
-Then ask your agent for a film:
+It carries ffmpeg and the headless Chromium, so nothing else is needed. It is **not code-signed**: Windows will
+show a SmartScreen warning, and "More info → Run anyway" gets past it.
 
-> Make a 20-second launch video for my CLI, with music.
+Only x64 Windows is built here. macOS and Linux run from source (below); upstream's releases have not been tried
+with this branch's changes.
 
-It opens the film in Studio and you watch it take shape. If your agent has no skills, tell it: "Run
-`npx -y openfilm@latest` and follow what it prints."
-
-Or download the desktop app for macOS or Windows from [openfilm.dev](https://openfilm.dev) or
-[Releases](https://github.com/openfilm/openfilm/releases): Studio with a chat beside it for the agents you have. It
-comes with ffmpeg and the headless browser, so there is nothing else to install.
-
-Making, editing and rendering films needs no account, and Zfilm's library of music, sounds, voices, stickers,
-transitions, effects and templates is free to use. For generated voice, music, images and video, connect the services
-you use (ElevenLabs, OpenAI, Google, OpenRouter, fal and others) with your own keys in Studio's Settings → Services,
-or sign in to Zfilm there to make them without keys of your own.
-
-To start from a finished film, open one of the [examples](https://github.com/openfilm/examples):
-
-```sh
-npx -y openfilm@latest open https://github.com/openfilm/examples/tree/main/one-prompt
-```
-
-## Commands
-
-Your agent runs them; so can you, with `npx -y openfilm@latest <command>` or `npm i -g openfilm`.
-
-```sh
-openfilm                          # what a film is, and Zfilm's own skills: where an agent starts
-openfilm open   [folder | url]    # show a film in Studio: a new one, an existing one, one from GitHub, else this one or the last
-openfilm look   [what] [t | a-b]  # check the film, a page or a media file: a contact sheet, one frame, or a range
-openfilm render [a-b]             # the MP4; --4k, --blur (motion blur), --alpha (.webm / .mov), --loudness=-14
-openfilm get    [what]            # media: free from Zfilm's library first, else made by a connected service
-openfilm canvas [apply <steps>]   # the canvas beside the edit: read it, or lay out notes, files and what to make
-openfilm skills                   # the skills a film can be made with; `openfilm skill <name>` prints one
-openfilm doctor                   # what this computer has for Zfilm, to paste into an issue
-```
-
-`openfilm <command> --help` lists a command's options; `openfilm get` alone lists what can be made, what the library
-has, and how to connect a service in Studio.
-
-## Studio
-
-Studio runs on your machine, in your browser: use one built on Chromium (Chrome, Edge), the engine films are drawn
-and exported with, so the preview is what you export. Everything in the film can be changed: text and layers in the
-picture, clips on the timeline, their place, look, volume and speed, and the subtitles. Your edits are saved to the
-film's files, so the agent sees and keeps them, and you can save named versions to go back to. Export a video, a GIF,
-the sound or its stems, subtitles, stills, slides, a transparent video, or the timeline itself for Final Cut Pro,
-Premiere Pro and DaVinci Resolve.
-
-Beside the edit is the canvas (⌘E switches between them): a board where you and the agent lay out notes, pictures,
-clips, voice-over, music and sound, wire them into each other, make each with your services, and send what you made
-to the timeline in order. A project can have several, each also seen as a storyboard. The library, in the assets
-drawer, holds footage, voices, sounds, music, text, stickers, filters, effects, transitions and templates, and the
-skills.
-
-The desktop app ([apps/desktop](apps/desktop)) is Studio with a chat beside it, for Claude Code, Codex and the other
-agents, or its own agent with your own key.
-
-## Skills
-
-How a film is made lives in skills, not in the tool. `openfilm` prints one page: what a film is, and Zfilm's own
-skills, which hold the rest: `edit` (the project, film.html and pages, and checking them), `media` (the library and
-the services) and `canvas`. An agent reads the one a task needs with `openfilm skill <name>`.
-
-Every other skill is a way of making a kind of film, known by its full name, `owner/name`. Studio's library lists
-Zfilm's and the community's under Discover, from [openfilm/skills](https://github.com/openfilm/skills), which also
-says how to write one; install one there, try it in a conversation without installing it, or add your own from a link
-or a folder (`openfilm skill add <link>`). An installed skill is offered to every agent.
-
-## How it works
+## A film
 
 A film is a folder with a `film.html`: tracks of clips cut together.
 
@@ -144,17 +102,46 @@ window.film = {
 </script>
 ```
 
-**The one rule:** the same `t` always draws the same picture, whatever was drawn before. Frames are asked for out of
-order, in parallel and between frames (for motion blur), so a page that keeps the rule renders the same at any size,
-on any machine. Anything else that makes pictures (Python, Blender, a video model) comes in as video or images.
+**The one rule:** the same `t` always draws the same picture, whatever was drawn before. Frames are asked for out
+of order, in parallel and between frames (for motion blur), so a page that keeps the rule renders the same at any
+size, on any machine. Anything else that makes pictures (Python, Blender, a video model) comes in as video or
+images.
 
-Zfilm spends its effort where models fail: checking the film. `look` draws every frame of its sheet twice, in two
-shuffled orders, and names any that changed, along with page errors, fonts that failed to load, missing sound files,
-and text cut off by the frame.
+[packages/openfilm/SPEC.md](packages/openfilm/SPEC.md) is the format, for anyone building a player, renderer or
+editor. [packages/openfilm/MANUAL.md](packages/openfilm/MANUAL.md) is what the `openfilm` command prints for
+agents, and [packages/openfilm/manual](packages/openfilm/manual) holds the skills that teach how a film is made.
 
-[MANUAL.md](packages/openfilm/MANUAL.md) is the page `openfilm` prints, and
-[packages/openfilm/manual](packages/openfilm/manual) holds Zfilm's own skills; [SPEC.md](packages/openfilm/SPEC.md)
-is for anyone building a player, renderer or editor.
+## Studio
+
+Studio runs on your machine, in your browser: use one built on Chromium (Chrome, Edge), the engine films are drawn
+and exported with, so the preview is what you export. Everything in the film can be changed: text and layers in the
+picture, clips on the timeline, their place, look, volume and speed, and the subtitles. Your edits are saved to the
+film's files, so the agent sees and keeps them, and you can save named versions to go back to.
+
+Export a video, a GIF, the sound or its stems, subtitles, stills, slides, a transparent video, or the timeline
+itself for Final Cut Pro, Premiere Pro and DaVinci Resolve.
+
+Beside the edit is the canvas: a board where you and the agent lay out notes, pictures, clips, voice-over, music
+and sound, wire them into each other, and send what you made to the timeline in order.
+
+## CLI
+
+The command is `packages/openfilm/bin/openfilm.mjs` (npm name: `openfilm`). From this checkout, `pnpm dev` leaves a
+build of it at `packages/openfilm/.dev/bin/openfilm` (`openfilm.cmd` on Windows), pointed at that Studio.
+
+```sh
+openfilm                          # what a film is, and the skills: where an agent starts
+openfilm open   [folder | url]    # show a film in Studio
+openfilm look   [what] [t | a-b]  # check the film: a contact sheet, one frame, or a range
+openfilm render [a-b]             # the MP4; --4k, --blur, --alpha, --loudness=-14
+openfilm get    [what]            # media: the library first, else a connected service
+openfilm canvas [apply <steps>]   # the canvas beside the edit
+openfilm skills                   # the skills a film can be made with
+openfilm doctor                   # what this computer has for Zfilm
+```
+
+`npx -y openfilm@latest` installs **upstream's** package, not this branch. To use this branch everywhere,
+`npm link` in `packages/openfilm`.
 
 ## From source
 
@@ -162,39 +149,42 @@ You need Node 22.18 or later, pnpm 9 (`corepack enable` gives you the version th
 PATH, and git.
 
 ```sh
-git clone https://github.com/openfilm/openfilm && cd openfilm
-pnpm install
-pnpm dev            # Studio from this checkout, with a sample film, beside an installed Zfilm
+git clone https://github.com/fivif/zfilm && cd zfilm
+pnpm install                 # also builds Studio's editor
+pnpm --filter openfilm exec playwright-core install chromium-headless-shell
+pnpm dev                     # Studio from this checkout, with a sample film
 pnpm test
+pnpm typecheck
 ```
 
-Tell your coding agent to run `packages/openfilm/.dev/bin/openfilm` and it makes films with your checkout, in that
-Studio. Every Zfilm, installed or from source, keeps its projects in the same library.
+`pnpm dev:desktop` runs the desktop app from source as "Zfilm Dev", with its own data folder and port, so it never
+collides with an installed Zfilm. `pnpm build` builds Studio's editor and the desktop app's window;
+`pnpm audit:public` checks that nothing private or outsourced slipped in.
 
-`pnpm dev:desktop` runs the desktop app from source, and `pnpm typecheck`, `pnpm build` and `pnpm audit:public` do
-what they say.
+To build the Windows installer:
+
+```powershell
+cd apps/desktop
+node scripts/release.mjs --platform=win --arch=x64
+# -> .release/win-x64/out/Zfilm-Setup-x64.exe
+```
+
 [CONTRIBUTING.md](CONTRIBUTING.md) has the details of each package.
 
-## Community
+## Known limits
 
-Questions, ideas and films you made go to [Discussions](https://github.com/openfilm/openfilm/discussions): ask in
-Q&A, share your film in Show and tell. Bugs go to [Issues](https://github.com/openfilm/openfilm/issues), with the
-report from Studio's Settings → Developer → Copy report (or `npx openfilm doctor`).
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue, see [SECURITY.md](SECURITY.md).
+- **Render throughput.** About 79% of each frame is spent reading pixels back out of Chromium (1080p 47.6 ms,
+  4K 174 ms). The way out is letting canvas/WebGL pages hand a `VideoFrame` straight to the encoder, which means
+  changing the `frame(t)` contract.
+- **Every tab is a whole Studio.** Switching a tab starts the editor again (2.54 MB of JS). Switching projects
+  inside one instance is the real fix.
+- **Audio-analysis imports** describe filename and technical metadata; they do not transcribe speech unless the
+  local model is installed.
 
 ## License
 
-The format, the CLI, Studio and the desktop app are [MIT](LICENSE). The Zfilm name and logo are trademarks: see
-[TRADEMARK.md](TRADEMARK.md).
+The format, the CLI, Studio and the desktop app are [MIT](LICENSE).
 
-## Star History
-
-<a href="https://www.star-history.com/#openfilm/openfilm&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=openfilm/openfilm&type=Date&theme=dark">
-    <img alt="Star History of openfilm/openfilm" src="https://api.star-history.com/svg?repos=openfilm/openfilm&type=Date">
-  </picture>
-</a>
+This branch is a fork of [OpenFilm](https://github.com/openfilm/openfilm). The Zfilm and OpenFilm names and logos
+are the upstream project's trademarks (see [TRADEMARK.md](TRADEMARK.md)); nothing here grants a right to use them
+for a different product.

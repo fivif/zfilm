@@ -1,7 +1,7 @@
 <p align="center">
   <br>
-  <img src="docs/logo-light.svg#gh-light-mode-only" alt="OpenFilm" height="72">
-  <img src="docs/logo-dark.svg#gh-dark-mode-only" alt="OpenFilm" height="72">
+  <img src="docs/logo-light.svg#gh-light-mode-only" alt="Zfilm" height="72">
+  <img src="docs/logo-dark.svg#gh-dark-mode-only" alt="Zfilm" height="72">
 </p>
 
 <h3 align="center">开源的 AI 视频智能体。</h3>
@@ -12,96 +12,54 @@
 
 ## 简介
 
-OpenFilm 让你的编程智能体来做视频，也让你亲手修改。
+Zfilm 让你的编程智能体来做视频，也让你亲手修改。
 
-让 Codex、Claude Code 或任何编程智能体做一部片子。它把片子写成网页，Studio（一个在浏览器里运行的本地剪辑器）
+让 Claude Code、Codex 或任何编程智能体做一部片子。它把片子写成网页，Studio（一个在浏览器里运行的本地剪辑器）
 实时显示片子成形的过程。之后哪里想改就改，可以自己动手，也可以直接跟它说。
 
 - **一个 HTML 文件。** `film.html` 把动画网页、视频素材、图片和声音按轨道剪在一起，样式用 CSS 写。不用学新东西：
   你的智能体本来就懂网页。
 - **一个函数。** 每个镜头都是一个网页，用 `frame(t)` 画出任意时刻，浏览器能画的都能用：three.js、WebGL、canvas、
-  SVG、CSS、GSAP、视频等等。不需要框架（比如 Remotion 或 HyperFrames）：一个函数就够了。
+  SVG、CSS、GSAP、视频等等。不需要框架：一个函数就够了。
 - **一个真正的剪辑器。** 可以移动、缩放、旋转页面里的任何元素，改它的文字、颜色和样式；摆放、裁剪、调整每个片段的
   样式，在时间线上修剪和切分。
 
-<p align="center"><img src="docs/openfilm.webp" alt="智能体用 OpenFilm 做出一部片子，再在 Studio 里手动修改" width="900"><br>
-<sub>▶ <a href="https://www.youtube.com/watch?v=Qea7v6dtNM0">观看 1 分 42 秒的发布视频</a>（英文），从头到尾都是用 OpenFilm 做的。</sub></p>
+## 关于这个仓库
+
+这是 [OpenFilm](https://github.com/openfilm/openfilm) 的**自建分支**，基线为上游 `v0.3.2`（`758b1a3`），
+当前版本 **0.3.6**。它不是上游项目，与上游没有隶属关系。上游的 issue、PR 和发行版都归上游管，这个分支
+只维护自己的。
+
+这个分支改了这些，简要地说：
+
+- **用户可见处统一叫 Zfilm**：窗口、Studio、聊天、安装包、图标。命令行与 npm 包名仍是 `openfilm`，
+  `zfilm` 作为别名可用。
+- **没有更新机制。** 不查版本、没有 feed、不后台下载、没有"重启以更新"。新版本就是装一个新的构建覆盖旧的。
+- **没有托管服务。** 账户、托管智能体、托管服务商都已移除。媒体服务用自己的 key，在 Studio 的设置 → 服务里连。
+- **素材库可以整套下载离线使用**，在设置 → 素材库里管理：分部分进度、暂停、续传、清理。
+- **可以把一个文件夹导入**受管素材库：原文件留在原地，副本编入目录，由你选中的智能体逐个描述。
+- **本地转写**（whisper-small，WASM，不联网），用于有语音的素材。
+- **Windows 修复**：切换项目标签遇到慢加载时不再被踢回项目列表；4K 导出在硬件编码器失败时逐级回退到软件编码，
+  不再长时间卡住；桌面应用可以在 Windows 上构建和打包。
+
+[SELF-CHANGELOG.md](SELF-CHANGELOG.md) 是完整的改动台账：每一处改动、为什么改、实测数据、以及还没做的部分。
 
 ## 安装
 
-需要 Node 22.2+ 和 ffmpeg，支持 macOS、Windows、Linux（Studio 保存版本还需要 git）；第一次运行会下载一个无界面的
-Chromium（约 100 MB）。
+Windows 安装包在 [Releases](https://github.com/fivif/zfilm/releases)：
 
-```sh
-npx skills add openfilm/openfilm
+```
+Zfilm-Setup-0.3.6-x64.exe   NSIS，x64，约 316 MB
 ```
 
-然后让你的智能体做一部片子：
+安装包自带 ffmpeg 和无界面 Chromium，不需要另外装东西。它**没有代码签名**，Windows 会弹 SmartScreen 警告，
+点"更多信息 → 仍要运行"即可。
 
-> 给我的命令行工具做一支 20 秒的发布视频，带配乐。
+这里只构建 x64 Windows。macOS 和 Linux 从源码运行（见下文）；上游的发行版没有配合这个分支的改动验证过。
 
-它会在 Studio 里打开这部片子，你能看着它一步步成形。如果你的智能体不支持 skill，就对它说：“运行
-`npx -y openfilm@latest`，按它打印的内容来做。”
+## 一部片子
 
-也可以从 [openfilm.dev](https://openfilm.dev) 或 [Releases](https://github.com/openfilm/openfilm/releases)
-下载 macOS 或 Windows 桌面版：就是 Studio，旁边多了一个对话窗口，接上你已有的智能体。它自带 ffmpeg 和无界面浏览器，
-不用另外安装。
-
-制作、剪辑和渲染片子都不需要账号，OpenFilm 素材库里的音乐、音效、音色、贴纸、转场、特效和模板都可以免费使用。需要生成
-配音、音乐、图片和视频时，在 Studio 的设置 → 服务里，用你自己的 key 连接你在用的服务（ElevenLabs、OpenAI、Google、
-OpenRouter、fal 等），或者登录 OpenFilm，不用自己的 key 也能生成。
-
-想从一部完整的片子开始，可以打开一个[示例](https://github.com/openfilm/examples)：
-
-```sh
-npx -y openfilm@latest open https://github.com/openfilm/examples/tree/main/one-prompt
-```
-
-## 命令
-
-这些命令由你的智能体来运行；你也可以自己运行：`npx -y openfilm@latest <命令>`，或者先 `npm i -g openfilm`。
-
-```sh
-openfilm                          # 片子是什么，以及 OpenFilm 自带的技能：智能体从这里开始
-openfilm open   [folder | url]    # 在 Studio 里打开片子：新建、打开已有的、从 GitHub 获取，或者当前目录的、上次打开的
-openfilm look   [what] [t | a-b]  # 检查片子、某个页面或媒体文件：缩略图总览、单帧或一段区间
-openfilm render [a-b]             # 渲染成 MP4；--4k、--blur（运动模糊）、--alpha（.webm / .mov）、--loudness=-14
-openfilm get    [what]            # 素材：先从 OpenFilm 素材库免费取，没有再用你接入的服务生成
-openfilm canvas [apply <steps>]   # 剪辑旁边的画布：读取，或者摆上笔记、文件和要生成的内容
-openfilm skills                   # 可以用来做片子的技能；`openfilm skill <名字>` 打印其中一个
-openfilm doctor                   # 这台电脑上 OpenFilm 需要的东西，可以直接贴进 issue
-```
-
-`openfilm <命令> --help` 列出某个命令的选项；单独运行 `openfilm get` 会列出能生成什么、素材库里有什么，以及怎么在
-Studio 里接入服务。
-
-## Studio
-
-Studio 在你的电脑上运行，在浏览器里打开。片子里的一切都能改：画面里的文字和图层，时间线上的片段，它们的位置、外观、
-音量和速度，还有字幕。你的修改会保存到片子的文件里，智能体能看到并保留它们；你也可以保存带名字的版本，随时回退。
-可以导出视频、GIF、声音或分轨、字幕、静帧、幻灯片、透明背景视频，也可以把整条时间线导出给
-Final Cut Pro、Premiere Pro 和 DaVinci Resolve。
-
-剪辑旁边是画布（⌘E 在两者之间切换）：你和智能体可以在上面摆笔记、图片、视频、配音、音乐和音效，把它们连起来，用你的
-服务逐个生成，再按顺序送到时间线。一个项目可以有多个画布，每个也能看成分镜。素材库在素材抽屉里，有视频素材、音色、音效、
-音乐、文字、贴纸、滤镜、特效、转场、模板，还有技能。
-
-桌面版（[apps/desktop](apps/desktop)）就是 Studio 加上一个对话窗口，可以用 Claude Code、Codex 等智能体，也可以用
-它自带的智能体配上你自己的 key。
-
-## 技能
-
-片子怎么做写在技能里，而不是写死在工具里。`openfilm` 只打印一页：片子是什么，以及 OpenFilm 自带的技能，其余的都在
-这些技能里：`edit`（项目、film.html 和页面，以及怎么检查）、`media`（素材库和各项服务）、`canvas`（画布）。智能体
-用 `openfilm skill <名字>` 读取当前任务需要的那个。
-
-其他技能各是一种做片子的方法，用全名 `owner/name` 区分。Studio 素材库的「发现」里列出 OpenFilm 官方和社区的技能，
-来自 [openfilm/skills](https://github.com/openfilm/skills)，那里也说明了怎么写一个技能。可以在那里安装，也可以不安装
-直接在对话里试用，或者从链接、文件夹添加你自己的（`openfilm skill add <链接>`）。装好的技能所有智能体都能用。
-
-## 工作原理
-
-一部片子就是一个带 `film.html` 的文件夹：由片段组成的轨道剪在一起。
+一部片子是一个文件夹，里面有一个 `film.html`：按轨道剪在一起的片段。
 
 ```html
 <meta name="viewport" content="width=1920, height=1080">
@@ -119,69 +77,99 @@ Final Cut Pro、Premiere Pro 和 DaVinci Resolve。
 </section>
 ```
 
-每个 `<section>` 是一条轨道，顺序和时间线上一致：第一条在最上层。一个片段就是一个元素：页面、视频、静态图片或声音。
-播放文件的哪一段用媒体片段标记（`#t=12,18`），从什么时候开始用 `at`，放在哪里用样式里的 `left`、`top`、`width` 和
-`height`，长什么样用 CSS。每个声音都是独立的片段。`overrides` 保存你对页面里元素的修改，智能体编辑时会保留它们。
+每个 `<section>` 是一条轨道，顺序就是时间线显示的顺序：第一个在最上面。一个片段就是一个元素：一个页面、
+一段视频、一张静态图或一段声音。播它的哪一部分是媒体片段（`#t=12,18`），从哪里开始是 `at`，放在哪里是
+样式里的 `left`、`top`、`width` 和 `height`，长什么样是 CSS。每段声音都是自己的一条片段。`overrides` 保存你对
+页面内元素的修改，智能体编辑时会保留它们。
 
-一个页面就是一个能画出自己任意时刻的网页，这就是全部约定：
+页面就是一个能画出自己任意时刻的网页，这就是全部契约：
 
 ```html
 <script type="module">
 window.film = {
-  frame(t) { /* 画出第 t 秒的完整画面，用什么画都行 */ },
-  duration: 4,               // 可选：它自己的时长，单位秒
-  ready: loadFonts(),        // 可选：等字体、图片、模型、数据加载完的 Promise
+  frame(t) { /* 用任何方式画出 t 秒的完整画面 */ },
+  duration: 4,               // 可选：自己的长度，秒
+  ready: loadFonts(),        // 可选：字体、图片、模型、数据的 Promise
   width: 480, height: 320,   // 可选：只占画面一部分的页面
 };
 </script>
 ```
 
-**唯一的规则：** 同一个 `t` 永远画出同一个画面，不管之前画过什么。渲染时会乱序、并行地请求各帧，还会请求两帧之间的
-时刻（用于运动模糊），所以遵守这条规则的页面，在任何尺寸、任何电脑上渲染出来都一样。其他能出画面的东西（Python、
-Blender、视频生成模型）以视频或图片的形式接进来。
+**唯一的规则**：同一个 `t` 永远画出同一张图，不管之前画过什么。帧是乱序、并行、在帧与帧之间（为运动模糊）
+被请求的，所以守规则的页面在任何尺寸、任何机器上渲染结果都一样。其他做画面的东西（Python、Blender、
+视频模型）以视频或图片的形式进来。
 
-OpenFilm 把功夫花在模型容易出错的地方：检查片子。`look` 会把总览里的每一帧按两种打乱的顺序各画一遍，指出前后不一致
-的帧，同时报告页面错误、加载失败的字体、缺失的声音文件，以及被画面边缘截断的文字。
+[packages/openfilm/SPEC.md](packages/openfilm/SPEC.md) 是格式规范，写给做播放器、渲染器或编辑器的人。
+[packages/openfilm/MANUAL.md](packages/openfilm/MANUAL.md) 是 `openfilm` 命令打印给智能体的手册，
+[packages/openfilm/manual](packages/openfilm/manual) 放着教怎么拍片子的技能。
 
-[MANUAL.md](packages/openfilm/MANUAL.md) 是 `openfilm` 打印的那一页，[packages/openfilm/manual](packages/openfilm/manual)
-里是 OpenFilm 自带的技能；[SPEC.md](packages/openfilm/SPEC.md) 是给想做播放器、渲染器或剪辑器的人看的格式规范。
+## Studio
 
-## 从源码运行
+Studio 在你自己的机器上跑，在浏览器里：用 Chromium 内核的浏览器（Chrome、Edge），也就是片子的绘制与导出引擎，
+所以预览就是导出的样子。片子里的一切都能改：画面里的文字和图层、时间线上的片段、它们的位置、外观、音量和速度，
+以及字幕。你的修改会写回片子的文件，智能体看得到也会保留；还可以存命名版本随时回去。
 
-需要 Node 22.18 或更高版本、pnpm 9（`corepack enable` 会自动使用本仓库指定的版本）、PATH 里有 ffmpeg，以及 git。
+可以导出视频、GIF、声音或其分轨、字幕、静帧、幻灯片、透明视频，或者把时间线本身导给 Final Cut Pro、
+Premiere Pro 和 DaVinci Resolve。
+
+编辑旁边是画布：一块板子，你和智能体在上面摆笔记、图片、片段、配音、音乐和音效，把它们连起来，按顺序把做好的
+东西送上时间线。
+
+## 命令行
+
+命令是 `packages/openfilm/bin/openfilm.mjs`（npm 名：`openfilm`）。在这个仓库里 `pnpm dev` 会在
+`packages/openfilm/.dev/bin/openfilm`（Windows 上是 `openfilm.cmd`）留下一个指向那个 Studio 的构建。
 
 ```sh
-git clone https://github.com/openfilm/openfilm && cd openfilm
-pnpm install
-pnpm dev            # 用这份源码运行 Studio，带一部示例片，和你安装的 OpenFilm 各用各的端口
-pnpm test
+openfilm                          # 一部片子是什么，以及技能：智能体的起点
+openfilm open   [folder | url]    # 在 Studio 里打开一部片子
+openfilm look   [what] [t | a-b]  # 检查片子：联系表、单帧，或一段范围
+openfilm render [a-b]             # MP4；--4k、--blur、--alpha、--loudness=-14
+openfilm get    [what]            # 素材：先找本地库，再找已连接的服务
+openfilm canvas [apply <steps>]   # 编辑旁边的画布
+openfilm skills                   # 可以用哪些技能做片子
+openfilm doctor                   # 这台机器为 Zfilm 准备了什么
 ```
 
-让你的编程智能体运行 `packages/openfilm/.dev/bin/openfilm`，它就会用这份源码在这个 Studio 里做片子。不管是安装的还是
-源码运行的 OpenFilm，项目都在同一个项目库里。
+`npx -y openfilm@latest` 装的是**上游**的包，不是这个分支。想让它到处可用，在 `packages/openfilm` 里
+`npm link`。
 
-`pnpm dev:desktop` 从源码运行桌面版；`pnpm typecheck`、`pnpm build` 和 `pnpm audit:public` 分别是类型检查、构建和
-公开内容审计。各个包的详细说明见 [CONTRIBUTING.md](CONTRIBUTING.md)（英文）。
+## 从源码
 
-## 社区
+需要 Node 22.18 或更高、pnpm 9（`corepack enable` 会给你这个仓库指定的版本）、PATH 上有 ffmpeg，以及 git。
 
-提问、想法和你做的片子，都欢迎发到 [Discussions](https://github.com/openfilm/openfilm/discussions)：问题发在 Q&A，
-作品发在 Show and tell。发现 bug 请提 [Issue](https://github.com/openfilm/openfilm/issues)。
+```sh
+git clone https://github.com/fivif/zfilm && cd zfilm
+pnpm install                 # 同时构建 Studio 的编辑器
+pnpm --filter openfilm exec playwright-core install chromium-headless-shell
+pnpm dev                     # 从这份代码跑 Studio，带一部示例片
+pnpm test
+pnpm typecheck
+```
 
-## 参与贡献
+`pnpm dev:desktop` 以"Zfilm Dev"从源码运行桌面应用，有自己的数据目录和端口，不会和已安装的正式版撞车。
+`pnpm build` 构建 Studio 的编辑器和桌面应用的窗口页；`pnpm audit:public` 检查有没有私密内容或外部依赖混进来。
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)（英文）。报告安全问题见 [SECURITY.md](SECURITY.md)。
+打 Windows 安装包：
+
+```powershell
+cd apps/desktop
+node scripts/release.mjs --platform=win --arch=x64
+# → .release/win-x64/out/Zfilm-Setup-x64.exe
+```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) 有每个包的细节。
+
+## 已知限制
+
+- **渲染吞吐。** 每帧约 79% 的时间花在把像素从 Chromium 里取出来（1080p 47.6 ms，4K 174 ms）。出路是让
+  canvas/WebGL 页面直接把 `VideoFrame` 交给编码器，但那要改 `frame(t)` 的契约。
+- **每个标签 = 一整个 Studio。** 切标签等于重新启动一次编辑器（2.54 MB 的 JS）。真正的解法是在一个实例里切项目。
+- **音频素材导入**描述的是文件名和技术元数据；除非装了本地模型，否则不做语音转写。
 
 ## 许可证
 
-格式、命令行工具、Studio 和桌面版均采用 [MIT](LICENSE) 许可证。OpenFilm 的名称和 Logo 是商标：见
-[TRADEMARK.md](TRADEMARK.md)。
+格式、命令行、Studio 和桌面应用是 [MIT](LICENSE)。
 
-## Star 趋势
-
-<a href="https://www.star-history.com/#openfilm/openfilm&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=openfilm/openfilm&type=Date&theme=dark">
-    <img alt="openfilm/openfilm 的 Star 趋势" src="https://api.star-history.com/svg?repos=openfilm/openfilm&type=Date">
-  </picture>
-</a>
+这个分支是 [OpenFilm](https://github.com/openfilm/openfilm) 的 fork。Zfilm 和 OpenFilm 的名称与标志是上游项目的
+商标（见 [TRADEMARK.md](TRADEMARK.md)）；这里不授予把商标用于其他产品的权利。
