@@ -706,7 +706,7 @@ function BoardView({ shown = true, projectId, folder, files, sources, onAddToFil
     }
   };
 
-  /* ── templates: the person's own, and OpenFilm's ── */
+  /* ── templates: the person's own, and Zfilm's ── */
   const [ownTemplates, setOwnTemplates] = React.useState<CanvasTemplate[]>([]);
   const loadTemplates = () => { void api.canvasTemplates().then(setOwnTemplates, () => {}); };
   React.useEffect(loadTemplates, []);

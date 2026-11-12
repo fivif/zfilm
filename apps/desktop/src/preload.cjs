@@ -23,6 +23,12 @@ contextBridge.exposeInMainWorld('openfilmNative', {
   revealPath: (path) => ipcRenderer.invoke('desktop:reveal', String(path)),
   /* a folder the person picks (Studio's "Open…" on its Projects list, the export's "Save to"): its path, or null */
   pickFolder: (options) => ipcRenderer.invoke('desktop:pick-folder', options ?? null),
+  libraryImport: {
+    create: (snapshot) => ipcRenderer.invoke('desktop:library-import:create', { snapshot }),
+    listJobs: () => ipcRenderer.invoke('desktop:library-import:list'),
+    retryFailed: (id) => ipcRenderer.invoke('desktop:library-import:retry', { id }),
+    onChange: on('desktop:library-import:change'),
+  },
   /* part of the window as a JPEG (base64), for a reference's picture: null when it could not be taken */
   capture: (rect) => ipcRenderer.invoke('desktop:capture', rect),
 
@@ -53,7 +59,6 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     switchAccount: (id) => ipcRenderer.invoke('desktop:agents:switch-account', { id }),
     usage: (id, fresh) => ipcRenderer.invoke('desktop:agents:usage', { id, fresh: fresh === true }),
     setShown: (id, shown) => ipcRenderer.invoke('desktop:agents:shown', { id, shown: shown === true }),
-    saveOpenFilmModels: (config) => ipcRenderer.invoke('desktop:agents:openfilm-models', { config }),
     locate: (id, words) => ipcRenderer.invoke('desktop:agents:locate', { id, words }),
     useAutomatic: (id) => ipcRenderer.invoke('desktop:agents:automatic', { id }),
     install: (id) => ipcRenderer.invoke('desktop:agents:install', { id }),

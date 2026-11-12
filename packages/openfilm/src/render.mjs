@@ -165,15 +165,20 @@ export async function render(args, opts = {}) {
   if (alpha && extname(out).toLowerCase() === '.mp4') { await probe.close(); await pool?.give(lent); throw new UsageError('mp4 has no transparency: write .webm or .mov with --alpha'); }
   /* a host may encode the container its own way (Studio's export: another codec, a quality, a frame around the film),
      and gets exactly that; else the picture goes through the graphics chip when it can */
+  const size = { w: Math.round(meta.width * scale), h: Math.round(meta.height * scale) };
   const own = { ...container, ...opts.format };
+  /* 4K and up in software: libx264 `medium` draws 16 frames a second here, `veryfast` twice that, and nobody sees the
+     difference at this size. A host's own format is left exactly as it asked for it. */
+  if (!opts.format && extname(out).toLowerCase() === '.mp4' && size.w * size.h >= 3_840 * 2_160) {
+    own.video = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '17', ...BT709];
+  }
   /* `clear` (with `alpha`): the format for a page that lets anything through. The page is drawn with `format` while
      every frame is opaque, each frame's alpha read as it is drawn; at the first pixel that shows through it is drawn
      again with `clear`, in the same tabs (an editing project's page: H.264 when it can, PNG with its alpha when not).
      The result says which (`clear`) */
   const clearFormat = alpha && opts.clear ? { ...container, ...opts.clear } : null;
   let clear = false;
-  const size = { w: Math.round(meta.width * scale), h: Math.round(meta.height * scale) };
-  const chip = opts.format || opts.hardware === false ? null : await chipFormat(extname(out).toLowerCase(), size, fps);
+  let chip = opts.format || opts.hardware === false ? null : await chipFormat(extname(out).toLowerCase(), size, fps);
   let format = chip ? { ...own, ...chip.format } : own;
   let encoder = chip?.encoder ?? encoderOf(own.video);
   let onChip = !!chip;
@@ -319,17 +324,28 @@ export async function render(args, opts = {}) {
         await encodeAll(format, false);
       }
     };
-    try {
-      await drawAll(format);
-    } catch (e) {
-      /* the chip's encoder gave up partway (a driver, a size it does not take): the frames again without it, and the
-         rest of this launch does without it */
-      if (!chip || !onChip || clear || opts.signal?.aborted || !/^ffmpeg/.test(e instanceof Error ? e.message : '')) throw e;
-      broken(chip.encoder);
-      onChip = false;
-      format = own;
-      encoder = encoderOf(own.video);
-      await drawAll(format);
+    /* the chip's encoder gave up partway (a driver, a size it does not take): another one this machine has draws the
+       frames again, and software only when none is left. Until 0.3.2 the first failure meant software for the whole
+       render, which on 4K is a third of the speed (libx264 draws 16 frames a second there). */
+    for (;;) {
+      try { await drawAll(format); break; }
+      catch (e) {
+        if (!chip || !onChip || clear || opts.signal?.aborted || !/^ffmpeg/.test(e instanceof Error ? e.message : '')) throw e;
+        const gaveUp = chip.encoder;
+        broken(gaveUp);
+        const another = await chipFormat(extname(out).toLowerCase(), size, fps);
+        if (another) {
+          chip = another;
+          format = { ...own, ...another.format };
+          encoder = another.encoder;
+          console.error(`openfilm render: ${gaveUp} stopped partway: ${encoder} draws the rest`);
+          continue;
+        }
+        onChip = false;
+        format = own;
+        encoder = encoderOf(own.video);
+        console.error(`openfilm render: ${gaveUp} stopped partway and this machine has no other encoder: the rest is drawn in software${size.w * size.h >= 3_840 * 2_160 ? ', slowly at this size' : ''}`);
+      }
     }
     if (process.stderr.isTTY && !opts.onProgress) process.stderr.write('\n');
     for (const p of pages) problems.push(...p.problems);

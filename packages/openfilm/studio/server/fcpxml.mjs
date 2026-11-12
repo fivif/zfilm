@@ -122,7 +122,7 @@ export function fcpxmlDocument(timeline, { cues = [] } = {}) {
   const primary = primaryStoryline(main?.clips ?? [], timeline.durationFrames);
   const sourceTracks = [...new Set(timeline.audio.flatMap((track) => track.sourceTrack === undefined ? [] : [track.sourceTrack]))]
     .sort((a, b) => a - b);
-  const audioRoles = new Map(sourceTracks.map((track, i) => [track, `OpenFilm A${i + 1}`]));
+  const audioRoles = new Map(sourceTracks.map((track, i) => [track, `Zfilm A${i + 1}`]));
   /** Paired footage sound follows its own picture; unrelated sound stays connected to the primary storyline.
    * @type {Map<string, { start: number, in: number, speed: number, children: string[] }>}
    */
@@ -141,7 +141,7 @@ export function fcpxmlDocument(timeline, { cues = [] } = {}) {
   timeline.audio.forEach((track, i) => {
     const role = track.role ? STEM_ROLES[track.role] : track.sourceTrack === undefined ? undefined : audioRoles.get(track.sourceTrack);
     for (const clip of track.clips) {
-      const audioRole = clip.sourceRow ? `OpenFilm ${clip.sourceRow}` : role;
+      const audioRole = clip.sourceRow ? `Zfilm ${clip.sourceRow}` : role;
       const picture = clip.linkGroup ? linked.get(clip.linkGroup) : undefined;
       const parent = picture ?? connectionAt(primary, clip.start).parent;
       const inheritedSpeed = picture?.speed ?? 1;
@@ -166,7 +166,7 @@ export function fcpxmlDocument(timeline, { cues = [] } = {}) {
     const styleId = `subtitle-style-${++titleCount}`;
     const attrs = [
       'ref="subtitle-title"', `name="${attribute(cue.text)}"`, `lane="${Math.max(1, timeline.video.length)}"`,
-      `offset="${time(offset)}"`, 'start="0s"', `duration="${time(span.end - span.start)}"`, 'role="titles.OpenFilm Subtitles"',
+      `offset="${time(offset)}"`, 'start="0s"', `duration="${time(span.end - span.start)}"`, 'role="titles.Zfilm Subtitles"',
     ];
     // Ordinary titles stay with the picture layers; native captions use FCP's separate caption area.
     // A negative strokeWidth keeps both the face and outline.
@@ -187,7 +187,7 @@ export function fcpxmlDocument(timeline, { cues = [] } = {}) {
       enabled: main?.enabled ?? true, lane: 0, offset: segment.start, kind: 'video', children: segment.children, audio: segment.clip.linkGroup ? linked.get(segment.clip.linkGroup)?.children : undefined,
     });
     return [
-      `            <gap name="OpenFilm" offset="${time(segment.start)}" start="0s" duration="${time(segment.end - segment.start)}">`,
+      `            <gap name="Zfilm" offset="${time(segment.start)}" start="0s" duration="${time(segment.end - segment.start)}">`,
       ...segment.children, '            </gap>',
     ];
   });

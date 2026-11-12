@@ -336,7 +336,7 @@ function wordsOfLines(lines) {
   });
 }
 
-export const CONNECT_TRANSLATOR = 'Translating subtitles needs your agent (in the app: Settings → Agents) or a service that translates (Settings → Services); the OpenFilm logo at the top left opens Settings.';
+export const CONNECT_TRANSLATOR = 'Translating subtitles needs your agent (in the app: Settings → Agents) or a service that translates (Settings → Services); the gear at the top left opens Settings.';
 
 /**
  * Translate the film's voices into `language` (one of FILM_SUBTITLE_LANGUAGES): each source heard in the film that has
@@ -393,7 +393,7 @@ export async function translateFilmSubtitles(root, language, options) {
  * @typedef {(root: string, src: string, signal: AbortSignal) => Promise<void>} Transcribe
  */
 
-export const CONNECT_TRANSCRIBER = 'Connect a service that transcribes in Studio: Settings (the OpenFilm logo at the top left) → Services.';
+export const CONNECT_TRANSCRIBER = 'Connect a service that transcribes in Studio: Settings (the gear at the top left) → Services.';
 
 /**
  * The subtitle routes under /api/projects/:id/ (`rest` is the part after it). Returns whether it answered.

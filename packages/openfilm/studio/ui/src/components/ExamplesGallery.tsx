@@ -1,5 +1,5 @@
 /**
- * The examples (films made with OpenFilm), to start from or to learn from: the projects window's "Examples" (also
+ * The examples (films made with Zfilm), to start from or to learn from: the projects window's "Examples" (also
  * opened by the app's chat, lib/host.ts `show-examples`). One is copied into a new project to change, or, over a film,
  * it or a part of it (a segment, or a stretch dragged on its strip) is pointed at in its chat for the agent to follow
  * (`onReference`), its canvas laid down on the film's, or how it was made asked.
@@ -10,7 +10,7 @@
  * window's own, so switching views moves nothing.
  */
 import React from 'react';
-import { ArrowLeft, Clapperboard, ExternalLink, MessageCircleQuestion, Play, Workflow, X } from 'lucide-react';
+import { ArrowLeft, Clapperboard, MessageCircleQuestion, Play, Workflow, X } from 'lucide-react';
 import { useT } from '@/i18n';
 import { seenExamples, sourcesApi, type Example } from '@/lib/project-sources';
 import { readCanvasDoc, type CanvasDoc } from '@/lib/canvas';
@@ -356,7 +356,6 @@ function ExampleDetail({ example, onStart, onReference, onUseCanvas, onExplain, 
           </div>
           <p className="mt-3 text-[12px] leading-[17px] text-[var(--text-faint)]">{t('gallery.startHow')}</p>
           {refer ? <p className="mt-1.5 text-[12px] leading-[17px] text-[var(--text-faint)]">{t('gallery.referenceHow')}</p> : null}
-          <a href={example.url} target="_blank" rel="noreferrer" className="mt-auto flex items-center gap-1.5 pt-6 text-[12px] text-[var(--text-muted)] hover:text-[var(--text)]"><ExternalLink size={13} />{t('gallery.viewSource')}</a>
         </div>
       </div>
     </div>

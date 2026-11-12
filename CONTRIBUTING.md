@@ -20,8 +20,8 @@ From the root:
 
 | Command | What it does |
 | --- | --- |
-| `pnpm dev` | Studio from source (packages/openfilm's `dev`), apart from an installed OpenFilm |
-| `pnpm dev:desktop` | the desktop app from source, as "OpenFilm Dev" |
+| `pnpm dev` | Studio from source (packages/openfilm's `dev`), apart from an installed Zfilm |
+| `pnpm dev:desktop` | the desktop app from source, as "Zfilm Dev" |
 | `pnpm test` | every package's tests |
 | `pnpm typecheck` | every package's types |
 | `pnpm build` | Studio's editor and the desktop app's window |
@@ -37,7 +37,7 @@ From the root:
 ```
 packages/openfilm/   npm `openfilm`: the format, the CLI and Studio
   SPEC.md, MANUAL.md   the film format; the manual `openfilm` prints for agents
-  manual/              OpenFilm's own skills, which the manual names: how a film is made, its media, its canvas
+  manual/              Zfilm's own skills, which the manual names: how a film is made, its media, its canvas
   bin/                 the `openfilm` command
   src/                 reading film.html, the host that draws frames in a headless browser, look and render
   studio/server/       Studio's server: projects, edits, history, exports, media providers
@@ -59,7 +59,7 @@ docs/                pictures for the README
 ## packages/openfilm: the format, the CLI and Studio
 
 `pnpm dev` runs Studio on port 4848, with its state and exports in `packages/openfilm/.dev/` (git-ignored), beside an
-OpenFilm you have installed; its projects are in the library every OpenFilm shares. It opens a sample film in your browser, rebuilds the editor
+Zfilm you have installed; its projects are in the library every Zfilm shares. It opens a sample film in your browser, rebuilds the editor
 when `studio/ui` changes (reload the page), and restarts Studio when `studio/server` or `src` change. Ctrl+C stops it.
 
 `pnpm --filter openfilm test` runs its tests and `pnpm --filter openfilm typecheck` checks the server's and the
@@ -76,13 +76,13 @@ While `pnpm dev` runs, `packages/openfilm/.dev/bin/openfilm` (`openfilm.cmd` on 
 on that Studio. Ask Codex, Claude Code or any coding agent for a film and tell it to run that command instead of the
 skill's `npx -y openfilm@latest` (the release); the manual names the same command, so it keeps using it. Your films
 appear in the Studio `pnpm dev` opened. Its state is in `packages/openfilm/.dev/` and its port is its own, so an
-installed OpenFilm, its Studio on port 4747 and `~/.openfilm` are left alone; projects are the one thing they share:
-every OpenFilm uses the same library, the one Studio's Settings chose (kept in `~/.openfilm/prefs.json`, which
-`OPENFILM_SHARED_HOME` points it at), by default `~/Movies/OpenFilm/Projects` on macOS. A test that must stay apart
+installed Zfilm, its Studio on port 4747 and `~/.openfilm` are left alone; projects are the one thing they share:
+every Zfilm uses the same library, the one Studio's Settings chose (kept in `~/.openfilm/prefs.json`, which
+`OPENFILM_SHARED_HOME` points it at), by default `~/Movies/Zfilm/Projects` on macOS. A test that must stay apart
 sets `OPENFILM_LIBRARY` and leaves `OPENFILM_SHARED_HOME` unset.
 
 To make your checkout the `openfilm` your agents use everywhere, `npm link` in `packages/openfilm` (`npm unlink -g
-openfilm` undoes it). That one shares `~/.openfilm` and port 4747 with an installed OpenFilm; of two Studios, the
+openfilm` undoes it). That one shares `~/.openfilm` and port 4747 with an installed Zfilm; of two Studios, the
 newer version replaces the older.
 
 ## packages/shared: what the clients share
@@ -96,13 +96,13 @@ workspace reads its TypeScript in `src/` as it is, and the desktop app bundles i
 ## apps/desktop: the desktop app
 
 ```sh
-pnpm dev:desktop                              # builds the window's page, then runs the app as "OpenFilm Dev"
+pnpm dev:desktop                              # builds the window's page, then runs the app as "Zfilm Dev"
 pnpm --filter @openfilm/desktop test
 pnpm --filter @openfilm/desktop typecheck
 ```
 
-Run from source, the app is its own "OpenFilm Dev": its own name, data folder, Studio home and port, so it never
-shares a window or a Studio with an installed OpenFilm. Its projects are in the same library as every OpenFilm's.
+Run from source, the app is its own "Zfilm Dev": its own name, data folder, Studio home and port, so it never
+shares a window or a Studio with an installed Zfilm. Its projects are in the same library as every Zfilm's.
 Its renamed copy of Electron lives in `apps/desktop/.dev/` (git-ignored), signed only for this machine: you need no
 certificate to run or change it. Its window's page imports Studio's editor
 from `packages/openfilm` as source, so a change to Studio shows in the app at its next start.
@@ -141,8 +141,8 @@ that you are taking it, and open one before starting a large change, so nobody d
 ## What we keep small
 
 - **The manual** ([MANUAL.md](packages/openfilm/MANUAL.md)), what `openfilm` prints for agents, is a page: what a
-  film is and OpenFilm's own skills ([manual/](packages/openfilm/manual)), which hold the rest: how a film is made and
-  seen (the one rule: the picture depends only on t), its media, its canvas. A new part of OpenFilm an agent works with
+  film is and Zfilm's own skills ([manual/](packages/openfilm/manual)), which hold the rest: how a film is made and
+  seen (the one rule: the picture depends only on t), its media, its canvas. A new part of Zfilm an agent works with
   gets a skill of its own there, never more words in the manual. No style advice or methods. If an agent gets
   something wrong, a word is added only when the manual or a skill was ambiguous; if a tool behaved
   oddly, the tool is fixed.
@@ -154,7 +154,7 @@ that you are taking it, and open one before starting a large change, so nobody d
 
 ### Which services are built in
 
-A built-in provider reads as a service OpenFilm vouches for: people hand it their keys, their prompts and their
+A built-in provider reads as a service Zfilm vouches for: people hand it their keys, their prompts and their
 footage. So we hold one standard for every one:
 
 - **An internationally known company, or a leading name in its field**, offering **its own** service (its own models,
@@ -167,9 +167,9 @@ footage. So we hold one standard for every one:
 
   We look at it with you, and say yes or no with the reason before you spend time on a pull request.
 - **A service that resells or routes other companies' models** is not built in, however good its API: those models
-  reach OpenFilm through their makers, or through a provider that is already built in.
+  reach Zfilm through their makers, or through a provider that is already built in.
 
-Every service, built in or not, works with OpenFilm today through **Settings › Services › Custom services**: any
+Every service, built in or not, works with Zfilm today through **Settings › Services › Custom services**: any
 HTTP service with its address, a key if it has one, and a few words about it; the agent calls it from there, and the
 key stays on the computer.
 

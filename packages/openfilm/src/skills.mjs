@@ -2,22 +2,22 @@
 /**
  * Skills: ways of making a kind of film that an agent takes up when asked. A skill is a folder in the Agent Skills
  * format (agentskills.io): a `SKILL.md` whose front matter names it and says what it is for (`name`, `description`),
- * its body the way to work, and any files it brings (scripts, templates, libraries). A skill never changes OpenFilm
+ * its body the way to work, and any files it brings (scripts, templates, libraries). A skill never changes Zfilm
  * itself: what it makes is pages and media in the project, like anything else an agent writes.
  *
  * Each is told apart by its uid, whose it is and its name (`openfilm/keynote`, `river/keynote`, SKILL_UID), so two of a
  * name are both had; an agent, which reads skills by name alone, is given the second as `owner-name` (agentNames).
  * Three places hold them, the first a uid is found in winning:
  *   project    `<project>/skills/<name>/`, kept with the project, so a film carries the ways it was made
- *   mine       `Skills/` beside the projects library (~/Movies/OpenFilm/Skills on macOS, ~/Videos/OpenFilm/Skills
+ *   mine       `Skills/` beside the projects library (~/Movies/Zfilm/Skills on macOS, ~/Videos/Zfilm/Skills
  *              elsewhere; OPENFILM_SKILLS to name another): the person's own, and those they added. In sight beside
  *              their Projects and Exports, backed up with them, and never in Studio's own folder, which a reset clears.
  *              Skills kept in Studio's home before (~/.openfilm/skills) are moved there (migrateMySkills).
  *   official   `skills-installed/` in the shared home (~/.openfilm): those installed from the openfilm/skills index
  *              (studio/server/skill-catalog.mjs), each the commit it was installed at, with where it came from in its
- *              `.source.json`. Every OpenFilm on this computer has the same ones.
+ *              `.source.json`. Every Zfilm on this computer has the same ones.
  *
- * OpenFilm's own (coreSkills: `manual/` in this package) are how a film is made, its media and its canvas, which the
+ * Zfilm's own (coreSkills: `manual/` in this package) are how a film is made, its media and its canvas, which the
  * manual names: in every agent's hands unless the person turns one off (skillsOff), never installed or removed, so the
  * manual stays a page.
  *
@@ -90,11 +90,11 @@ export function discoverSkills() {
     return skill ? [skill] : [];
   });
 }
-/** OpenFilm's own skills, released with this package beside the manual. */
+/** Zfilm's own skills, released with this package beside the manual. */
 export const coreSkillsDir = () => join(dirname(fileURLToPath(import.meta.url)), '..', 'manual');
 /**
  * The person's own skills: OPENFILM_SKILLS, else `Skills/` beside the default projects library (OPENFILM_LIBRARY, else
- * ~/Movies/OpenFilm/Projects on macOS, ~/Videos/OpenFilm/Projects elsewhere: locations.mjs libraryDefault). They stay
+ * ~/Movies/Zfilm/Projects on macOS, ~/Videos/Zfilm/Projects elsewhere: locations.mjs libraryDefault). They stay
  * there when new projects are set to go elsewhere.
  */
 export const mySkillsDir = () => process.env.OPENFILM_SKILLS || join(dirname(libraryDefault()), 'Skills');
@@ -125,7 +125,7 @@ export function migrateMySkills({ from = oldSkillsDir(), to = mySkillsDir() } = 
     try { renameSyncSafe(skill.folder, target); moved.push(skill.name); } catch { kept.push(basename(skill.folder)); }
   }
   try {
-    writeFileSync(join(from, MOVED_NOTE), `Your OpenFilm skills are kept in ${to} now.
+    writeFileSync(join(from, MOVED_NOTE), `Your Zfilm skills are kept in ${to} now.
 ${kept.length ? `These stayed here, as a skill of the same name is there: ${kept.join(', ')}.
 ` : ''}`);
   } catch { /* the note is only a courtesy */ }
@@ -136,16 +136,16 @@ ${kept.length ? `These stayed here, as a skill of the same name is there: ${kept
 export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /**
- * A skill's uid: whose it is and its name, `owner/name`, the one way OpenFilm tells skills apart (two of the same name
+ * A skill's uid: whose it is and its name, `owner/name`, the one way Zfilm tells skills apart (two of the same name
  * can be had side by side), and how one is shared and searched. The owner is read from where the skill came from,
- * never from what it says of itself, so none can pass for another's: `openfilm` for OpenFilm's (released with it), the
+ * never from what it says of itself, so none can pass for another's: `openfilm` for Zfilm's (released with it), the
  * GitHub account one of the person's was added from (`gitlab-<group>` on GitLab), `local` for one made here or added
  * from a folder, `project` for a project's own.
  */
 export const SKILL_UID = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9-]{0,63}$/;
 
 /**
- * Namespaces that are never a GitHub account's: `openfilm` (OpenFilm's own, github.com/openfilm), `local` (the
+ * Namespaces that are never a GitHub account's: `openfilm` (Zfilm's own, github.com/openfilm), `local` (the
  * person's own, made or added from a folder here) and `project` (a project's). An account of one of those names is
  * `github-<name>`, so it is never taken for them.
  */
@@ -160,7 +160,7 @@ const uidPart = (name) => name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replac
  * the person's came from
  */
 export function skillOwner(source, origin) {
-  /* an installed one is its repository's account's (OpenFilm's own, openfilm); OpenFilm's own skills, openfilm */
+  /* an installed one is its repository's account's (Zfilm's own, openfilm); Zfilm's own skills, openfilm */
   if (source === 'official') {
     const account = origin?.address ? /^https:\/\/github\.com\/([\w.-]+)\//.exec(`${origin.address}/`)?.[1] : null;
     return account ? accountSpace(uidPart(account)) : 'openfilm';
@@ -226,7 +226,7 @@ export function parseSkillFile(text) {
  * @typedef {{ kind?: 'workflow' | 'style', order?: number, icon?: string, cover?: string, preview?: string, repository?: string, needs?: Record<string, string>, platforms?: SkillPlatform[] }} SkillLook
  *   where an app shows it (openfilm.json, each optional): `kind` a way of working or a look, `order` among its kind,
  *   `icon` a mark's name, `cover` a picture and `preview` a video in its folder, `repository` where its source is read,
- *   `needs` what it needs beyond OpenFilm (by language), `platforms` the computers it runs on (none: every one)
+ *   `needs` what it needs beyond Zfilm (by language), `platforms` the computers it runs on (none: every one)
  */
 
 /** The words of an openfilm.json field: a string (any language), or one per language; anything else is none. */
@@ -324,7 +324,7 @@ export function skillsIn(dir, source) {
 
 /**
  * Every skill available to a project (or none: only the person's own and the official ones), by uid, the first place
- * holding a uid winning (one of the person's added from OpenFilm's own repository is that official one); sorted by
+ * holding a uid winning (one of the person's added from Zfilm's own repository is that official one); sorted by
  * name, then the project's, the person's, the official ones. Two of the same name and other owners are both there.
  * @param {{ project?: string | null, mine?: string, official?: string }} [where]
  * @returns {Skill[]}
@@ -348,7 +348,7 @@ export function listSkills({ project = null, mine = mySkillsDir(), official = of
 
 /**
  * Which skills agents get: the person's own, a project's and those installed, all of them unless turned off
- * (`skillsOff`), offered to no agent until turned on again. Kept in the shared prefs.json, so every OpenFilm on this
+ * (`skillsOff`), offered to no agent until turned on again. Kept in the shared prefs.json, so every Zfilm on this
  * computer agrees; `home`: the Studio home that holds it.
  */
 const namesIn = (/** @type {unknown} */ value) => (Array.isArray(value) ? [...new Set(value.filter((n) => typeof n === 'string' && (SKILL_UID.test(n) || SKILL_NAME.test(n))))].sort() : []);
@@ -378,17 +378,17 @@ export function usableSkills({ home, ...where } = {}) {
   return listSkills(where).filter((s) => !keeps(off, s));
 }
 
-/** OpenFilm's own skills by name, in the order agents are given them: how a film is made, its media, its canvas. */
+/** Zfilm's own skills by name, in the order agents are given them: how a film is made, its media, its canvas. */
 export const CORE_SKILLS = Object.freeze(['edit', 'media', 'canvas']);
 
-/** OpenFilm's own skills (coreSkillsDir), which every agent has unless turned off, in CORE_SKILLS's order. @returns {Skill[]} */
+/** Zfilm's own skills (coreSkillsDir), which every agent has unless turned off, in CORE_SKILLS's order. @returns {Skill[]} */
 export function coreSkills() {
   const rank = (/** @type {Skill} */ s) => (CORE_SKILLS.includes(s.name) ? CORE_SKILLS.indexOf(s.name) : CORE_SKILLS.length);
   return skillsIn(coreSkillsDir(), 'official').sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
 }
 
 /**
- * One skill by its uid (`owner/name`), or by its name (OpenFilm's own first, else the first listSkills has), or null.
+ * One skill by its uid (`owner/name`), or by its name (Zfilm's own first, else the first listSkills has), or null.
  * @param {string} key @param {Parameters<typeof listSkills>[0]} [where]
  */
 export function findSkill(key, where) {
@@ -398,7 +398,7 @@ export function findSkill(key, where) {
 
 /**
  * Every skill a key names, one each: by its full name (`owner/name`, or as an agent is given it, `owner:name` in a
- * Claude Code plugin or `owner-name` elsewhere), else by its name alone, which two owners may share. OpenFilm's own and
+ * Claude Code plugin or `owner-name` elsewhere), else by its name alone, which two owners may share. Zfilm's own and
  * the library's first, then Discover's not installed (tried in a conversation before it is installed).
  * @param {string} key @param {Parameters<typeof listSkills>[0]} [where] @returns {Skill[]}
  */
@@ -439,7 +439,7 @@ export function agentNames(skills) {
 }
 
 /**
- * OpenFilm's skills as agents are offered them, each with the name it is given by (agentNames), in this order: its own
+ * Zfilm's skills as agents are offered them, each with the name it is given by (agentNames), in this order: its own
  * not turned off (`core`), those installed and on (`usable`), then the rest of the library but those off, which a
  * message can still name (Try now). `given`: the first two, what a session has.
  * @param {Parameters<typeof usableSkills>[0]} [where]
@@ -458,9 +458,9 @@ export function offeredSkills({ home, ...where } = {}) {
 }
 
 /**
- * Text for an agent with OpenFilm's commands as `run` types them here (`npx -y openfilm@latest`, the app's own by its
- * path): the manual's and OpenFilm's own skills' `openfilm …`, and the official ones' `npx openfilm …`. A skill read
- * from its file says `openfilm`, which is the command on the PATH where OpenFilm is installed and in the desktop app.
+ * Text for an agent with Zfilm's commands as `run` types them here (`npx -y openfilm@latest`, the app's own by its
+ * path): the manual's and Zfilm's own skills' `openfilm …`, and the official ones' `npx openfilm …`. A skill read
+ * from its file says `openfilm`, which is the command on the PATH where Zfilm is installed and in the desktop app.
  * @param {string} text @param {string} run
  */
 export const asRun = (text, run) => text.replaceAll('npx openfilm', run).replace(/`openfilm(?=[\s`])/g, `\`${run}`);
@@ -535,10 +535,10 @@ function coverPicture(data) {
   return { bytes, extension };
 }
 
-/* the name a cover chosen in OpenFilm is saved under: only such a file is removed when the cover changes */
+/* the name a cover chosen in Zfilm is saved under: only such a file is removed when the cover changes */
 const CHOSEN_COVER = /^openfilm-cover-[0-9a-f-]{36}\.(?:png|jpg|webp)$/;
 
-/** Replace the metadata atomically. The previous cover's file goes only when OpenFilm saved it (CHOSEN_COVER); a
+/** Replace the metadata atomically. The previous cover's file goes only when Zfilm saved it (CHOSEN_COVER); a
  * picture of the skill's own stays, as its content may use it.
  * @param {string} folder @param {{ bytes: Buffer, extension: string } | null} picture */
 function writeSkillCover(folder, picture) {

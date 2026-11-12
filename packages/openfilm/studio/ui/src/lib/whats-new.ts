@@ -72,7 +72,7 @@ export const RELEASE: ReleaseNotes = {
       },
       {
         "kind": "fixed",
-        "text": "Reconnect OpenFilm when credentials expire. Chat history deduplicates sessions, keeps attachment types and extensions, and can undo a same-size text rewrite."
+        "text": "Reconnect Zfilm when credentials expire. Chat history deduplicates sessions, keeps attachment types and extensions, and can undo a same-size text rewrite."
       },
       {
         "kind": "fixed",
@@ -130,7 +130,7 @@ export const RELEASE: ReleaseNotes = {
       },
       {
         "kind": "fixed",
-        "text": "OpenFilm 凭据失效时提示重新登录。修复对话重复、附件类型或扩展名丢失，以及等长文本改写撤销漏掉的问题。"
+        "text": "Zfilm 凭据失效时提示重新登录。修复对话重复、附件类型或扩展名丢失，以及等长文本改写撤销漏掉的问题。"
       },
       {
         "kind": "fixed",
@@ -188,7 +188,7 @@ export const RELEASE: ReleaseNotes = {
       },
       {
         "kind": "fixed",
-        "text": "OpenFilm の資格情報が失効した場合は再ログインを案内します。会話の重複、添付ファイルの種類と拡張子、同じ長さの書き換えの取り消しを修正しました。"
+        "text": "Zfilm の資格情報が失効した場合は再ログインを案内します。会話の重複、添付ファイルの種類と拡張子、同じ長さの書き換えの取り消しを修正しました。"
       },
       {
         "kind": "fixed",
@@ -246,7 +246,7 @@ export const RELEASE: ReleaseNotes = {
       },
       {
         "kind": "fixed",
-        "text": "OpenFilm 자격 증명이 만료되면 다시 로그인하도록 안내합니다. 대화 중복과 첨부 파일 유형 및 확장자, 같은 길이의 텍스트 수정 실행 취소를 바로잡았습니다."
+        "text": "Zfilm 자격 증명이 만료되면 다시 로그인하도록 안내합니다. 대화 중복과 첨부 파일 유형 및 확장자, 같은 길이의 텍스트 수정 실행 취소를 바로잡았습니다."
       },
       {
         "kind": "fixed",
@@ -304,7 +304,7 @@ export const RELEASE: ReleaseNotes = {
       },
       {
         "kind": "fixed",
-        "text": "Vuelve a conectar OpenFilm cuando caducan las credenciales. El chat evita sesiones duplicadas, conserva tipos y extensiones de adjuntos y deshace cambios de texto del mismo tamaño."
+        "text": "Vuelve a conectar Zfilm cuando caducan las credenciales. El chat evita sesiones duplicadas, conserva tipos y extensiones de adjuntos y deshace cambios de texto del mismo tamaño."
       },
       {
         "kind": "fixed",

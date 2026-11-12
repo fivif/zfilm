@@ -8,7 +8,7 @@ import { join } from 'node:path';
 /* the Services settings of the tests' own (Library search on, as it is by default) */
 process.env.OPENFILM_HOME = mkdtempSync(join(tmpdir(), 'semantic-home-'));
 
-/* OpenFilm's service: the things it finds for a search, as `found` says, each request kept */
+/* Zfilm's service: the things it finds for a search, as `found` says, each request kept */
 /** @type {{ text: string, cat: string, limit: number }[]} */
 const asked = [];
 let answer = (/** @type {{ cat: string }} */ _q) => ({ status: 200, body: { found: [['sounds/a', 0.9], ['sounds/c', 0.7]] } });

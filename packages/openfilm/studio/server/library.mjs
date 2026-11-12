@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * OpenFilm's library: the transitions, effects, text, stickers, looks and sounds that come with OpenFilm (library/ in
+ * Zfilm's library: the transitions, effects, text, stickers, looks and sounds that come with Zfilm (library/ in
  * this package), read-only, shown in the assets drawer beside the project's media and Saved.
  *
  *   library/index.json   what is in it: each thing's id (its place in library/), its category and group, its name in
@@ -10,17 +10,17 @@
  *                          look   a CSS `filter`, written into a clip's style
  *                          fade   one of Studio's transitions (ui lib/transitions), made of fades
  *                        and, for a thing someone sent to the library, `by`: their GitHub name (the drawer shows it
- *                        as the community's; without it, a thing is OpenFilm's own)
+ *                        as the community's; without it, a thing is Zfilm's own)
  *   library/<id>/…       the things themselves
  *   library/stickers.json  emoji stickers, each a bundle under stickers/emoji/ (published with the library likewise)
  *   library/audio.json   more sounds and music, as index.json says its own (`audio/<sfx|music>/<name>.mp3`, each with its
  *                        waveform beside it in waves/), the files published with the library rather than kept in git
  *                        (fetchLibrary: fetched on first use, like the voices' samples and the emoji stickers)
- *   library/voices.json  the voices to speak a voice-over in: the ready-made voices of the voice-over services OpenFilm
+ *   library/voices.json  the voices to speak a voice-over in: the ready-made voices of the voice-over services Zfilm
  *                        offers, each with its service's own sample (voices/<service>/<voice>.m4a); made by
  *                        scripts/library-voices.mjs from those services' own lists
  *
- * The things the person starred are kept in the shared prefs.json (`libraryFavorites`, their ids), so every OpenFilm on
+ * The things the person starred are kept in the shared prefs.json (`libraryFavorites`, their ids), so every Zfilm on
  * this computer shows the same ones.
  *
  * A thing is taken into a project as a thing of Saved is (saved.mjs takeSaved), by its path `openfilm/<id>`: copied,
@@ -31,10 +31,13 @@ import { createWriteStream, existsSync, readFileSync, readdirSync, realpathSync,
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
+import http from 'node:http';
+import https from 'node:https';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { communityCatalog, communityReady, fetchCommunity, isCommunity, refreshCommunity } from './community-library.mjs';
 import { setSharedPref, sharedHome, sharedPref } from '../../src/locations.mjs';
+import { proxyAgent } from './library-proxy.mjs';
 
 export { refreshCommunity };
 
@@ -48,7 +51,7 @@ export const builtInRoot = () => process.env.OPENFILM_BUILT_IN_LIBRARY || fileUR
  * The library's parts too big to come with the package (git-ignored, left out of npm): its sounds and music (`audio/`),
  * its voices' samples (`voices/`), its emoji stickers (`stickers/emoji/`), the models Local services runs (`models/`,
  * src/local-models.mjs), each template's example with its music (`examples/`). Each is fetched on first use from the
- * library's host and kept in the shared home, once for every OpenFilm on this computer; a bundle (a sticker) comes
+ * library's host and kept in the shared home, once for every Zfilm on this computer; a bundle (a sticker) comes
  * with the list of its files, `files.json` beside it there, written when the library is published.
  */
 const PUBLISHED = ['audio/', 'voices/', 'stickers/emoji/', 'models/', 'examples/'];
@@ -104,17 +107,71 @@ function fetchFile(rel) {
   return job;
 }
 
+/** Why the last fetch failed, for Settings to show (null once one works). */
+/** @type {string | null} */ let lastError = null;
+export const lastLibraryError = () => lastError;
+
+/** The body of a response, as text (files.json, which is small). */
+async function textOf(/** @type {any} */ stream) {
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/**
+ * One request for the library: through the saved proxy when there is one, else as Node's fetch does. Through a proxy
+ * the redirect is followed here (the file host answers 302), so callers see the last response either way.
+ * @param {string} url @param {number} timeoutMs
+ * @returns {Promise<{ ok: boolean, status: number, url: string, stream: any, json: () => Promise<any> }>}
+ */
+async function open(url, timeoutMs) {
+  const agent = await proxyAgent();
+  if (!agent) {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    return { ok: res.ok, status: res.status, url: res.url, stream: () => Readable.fromWeb(/** @type {any} */ (res.body)), json: () => res.json() };
+  }
+  /** @type {(at: string, hops: number) => Promise<any>} */
+  const go = (at, hops) => new Promise((resolve, reject) => {
+    const lib = at.startsWith('https:') ? https : http;
+    const req = lib.get(at, { agent }, (res) => {
+      const status = res.statusCode ?? 0;
+      const location = res.headers.location;
+      if (status >= 300 && status < 400 && location && hops > 0) {
+        res.resume();
+        resolve(go(new URL(location, at).toString(), hops - 1));
+        return;
+      }
+      resolve({ ok: status >= 200 && status < 300, status, url: at, stream: () => res, json: async () => JSON.parse(await textOf(res)) });
+    });
+    req.setTimeout(Math.min(timeoutMs, 20_000), () => req.destroy(new Error('the proxy did not answer in time')));
+    req.on('error', reject);
+  });
+  return go(url, 3);
+}
+
+/**
+ * Where the files themselves come from: the library's host sends each request on to its own file server, and asking
+
+
+
+/** Where the files come from: the library's host until the first answer says its file server, which saves the redirect. */
+let assetRoot = '';
+const filesRoot = () => assetRoot || libraryHost();
+
 /** One file of the published library into the cache: whole or not at all. */
 async function downloadFile(/** @type {string} */ rel) {
   /* a model is a hundred megabytes: time for a slow line */
-  const res = await fetch(`${libraryHost()}/${rel.split('/').map(encodeURIComponent).join('/')}`, { signal: AbortSignal.timeout(rel.startsWith('models/') ? 30 * 60_000 : 60_000) });
+  const res = await open(`${filesRoot()}/${rel.split('/').map(encodeURIComponent).join('/')}`, rel.startsWith('models/') ? 30 * 60_000 : 60_000);
   if (!res.ok) throw new Error(`the library's ${rel} came back ${res.status}`);
+  if (res.url && res.url !== filesRoot()) {
+    try { assetRoot = new URL(res.url).origin + libraryHost().replace(/^https?:\/\/[^/]+/, ''); } catch { /* keep the one we have */ }
+  }
   const at = inside(libraryCache(), rel);
   await mkdir(dirname(at), { recursive: true });
   const part = `${at}.part-${process.pid}`;
   /* written as it comes: how far a model is can be read off its size (local-models.mjs) */
   try {
-    await pipeline(Readable.fromWeb(/** @type {import('node:stream/web').ReadableStream} */ (res.body)), createWriteStream(part));
+    await pipeline(/** @type {any} */ (res.stream()), createWriteStream(part));
   } catch (e) {
     await rm(part, { force: true });
     throw e;
@@ -138,7 +195,7 @@ export function fetchLibrary(/** @type {unknown} */ rel) {
       /* a file has a name with a dot; a bundle is a folder, its files listed beside it */
       if (/\.[a-z0-9]+$/i.test(rel)) await fetchFile(rel);
       else {
-        const res = await fetch(`${libraryHost()}/${rel.split('/').map(encodeURIComponent).join('/')}/files.json`, { signal: AbortSignal.timeout(30_000) });
+        const res = await open(`${libraryHost()}/${rel.split('/').map(encodeURIComponent).join('/')}/files.json`, 30_000);
         if (!res.ok) return null;
         const files = /** @type {unknown} */ (await res.json());
         if (!Array.isArray(files)) return null;
@@ -148,8 +205,10 @@ export function fetchLibrary(/** @type {unknown} */ rel) {
         for (const file of files) if (typeof file === 'string') await fetchFile(`${rel}/${file}`);
         await rm(join(folder, '.partial'), { force: true });
       }
+      lastError = null;
       return located(rel);
-    } catch {
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
       return null;
     } finally {
       fetching.delete(rel);

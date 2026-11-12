@@ -79,12 +79,12 @@ test('an example\'s folder: beside a local index, or fetched into the cache and 
   assert.equal(fetched, 2, 'a day on: fetched again');
 });
 
-test('GitHub\'s index shows at once: the copy OpenFilm came with, then the last one read, while GitHub is asked', async () => {
+test('GitHub\'s index shows at once: the copy Zfilm came with, then the last one read, while GitHub is asked', async () => {
   const { EXAMPLES_INDEX, listExamples } = await import('./examples.mjs');
   const home = mkdtempSync(join(tmpdir(), 'of-examples-home-'));
   let answer;
   const slow = () => new Promise((done) => { answer = done; });
-  /* GitHub does not answer yet: the copy that came with OpenFilm, its posters served from it */
+  /* GitHub does not answer yet: the copy that came with Zfilm, its posters served from it */
   const first = await listExamples({ source: EXAMPLES_INDEX, fetchImpl: slow, home });
   assert.ok(first.length > 0, 'examples at once');
   assert.ok(first.every((e) => e.poster?.startsWith('/api/examples/file/')), 'posters from the copy');

@@ -1,7 +1,7 @@
 /**
  * Build the app people install: `pnpm --filter @openfilm/desktop release` (`--arch=x64` for Intel Macs, default this
  * Mac's; `--unsigned` for a local try; `--platform=win --arch=x64|arm64` for the Windows installer, built here too;
- * `--official` for the project's own build; `--preview` for "OpenFilm Preview", an app of its own to try a build in).
+ * `--official` for the project's own build; `--preview` for "Zfilm Preview", an app of its own to try a build in).
  *
  * Which build it is comes from the `openfilm` package's product files: a build of this source uses product.json,
  * empty in the repository (no update feed: the app never looks for updates); `--official` uses product.official.json
@@ -26,8 +26,8 @@
  *
  *   4. the .dmg is signed and notarized too, so the download itself opens without a warning.
  *
- * Windows: an NSIS installer (OpenFilm-Setup-<version>-<arch>.exe, per user, no admin) and its feed (latest.yml). It is
- * built on this Mac: the program's icon and version are written into OpenFilm.exe with resedit (rcedit would need
+ * Windows: an NSIS installer (Zfilm-Setup-<version>-<arch>.exe, per user, no admin) and its feed (latest.yml). It is
+ * built on this Mac: the program's icon and version are written into Zfilm.exe with resedit (rcedit would need
  * wine). Not code-signed yet (no Windows certificate): SmartScreen asks once, "More info" → "Run anyway".
  *
  * Output: .release/<arch>/out (git-ignored). Nothing is uploaded: official builds are published by the project's
@@ -61,16 +61,18 @@ if (unsigned && !win && !process.argv.includes('--unsigned')) {
 
 /* this build's product: its update feed (see the header) */
 const official = process.argv.includes('--official');
-/* --preview: "OpenFilm Preview", to try a build in apart from an installed OpenFilm: its own name and bundle, data
+/* --preview: "Zfilm Preview", to try a build in apart from an installed Zfilm: its own name and bundle, data
    folder, Studio home, port and projects (src/flavor.mjs `preview`, from the package's `openfilmFlavor`); no updates */
 const preview = process.argv.includes('--preview');
 if (preview && official) throw new Error('--preview is never the official build');
-const NAME = preview ? 'OpenFilm Preview' : 'OpenFilm';
+const NAME = preview ? 'Zfilm Preview' : 'Zfilm';
 const productFile = join(protocol, official ? 'product.official.json' : 'product.json');
 const product = JSON.parse(readFileSync(productFile, 'utf8'));
 const updates = typeof product.desktop?.updates === 'string' ? product.desktop.updates.trim().replace(/\/+$/, '') : '';
 /** Where the packaged app looks for updates (the release's files are uploaded there), or null: it never looks. */
-export const FEED = updates ? `${updates}/${win ? 'win' : 'mac'}/${arch}` : null;
+/* This tree builds no update feed: no app-update.yml is written into the app, so electron-updater has nothing to
+   read and no build of ours can update itself. Install a new build over it. */
+export const FEED = null;
 const NOTARY_PROFILE = process.env.OPENFILM_NOTARY_PROFILE || 'openfilm-notary';
 
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: 'inherit', ...opts });
@@ -79,25 +81,30 @@ const pkg = JSON.parse(readFileSync(join(desktop, 'package.json'), 'utf8'));
 /* 1. the window's page, and Studio's editor for the package */
 const vite = join(dirname(require.resolve('vite/package.json')), 'bin', 'vite.js');
 run(process.execPath, [vite, 'build', '--config', 'shell/vite.config.ts', '--logLevel', 'warn'], { cwd: desktop });
-/* the old assets stay: a Studio already running from this checkout keeps loading the pages it has open */
-run(process.execPath, [vite, 'build', '--config', 'studio/ui/vite.config.ts', '--emptyOutDir=false', '--logLevel', 'warn'], { cwd: protocol });
+/* the UI is packed into the app, so it is built into an empty folder: a leftover bundle from an older build would
+   keep its hashed name and be packed beside the new one, and Studio would serve whichever the old index.html names */
+rmSync(join(protocol, 'studio/ui/dist'), { recursive: true, force: true });
+run(process.execPath, [vite, 'build', '--config', 'studio/ui/vite.config.ts', '--logLevel', 'warn'], { cwd: protocol });
 
 /* 2. the stage */
 rmSync(work, { recursive: true, force: true });
 mkdirSync(stage, { recursive: true });
 cpSync(join(desktop, 'src'), join(stage, 'src'), { recursive: true, filter: (from) => !from.endsWith('.test.mjs') });
 cpSync(join(desktop, 'shell/dist'), join(stage, 'shell/dist'), { recursive: true });
-const pack = (dir) => execFileSync('npm', ['pack', '--ignore-scripts', '--pack-destination', work, '--silent'], { cwd: dir, encoding: 'utf8' }).trim().split('\n').pop();
+/* npm and pnpm are .cmd shims on Windows: execFile cannot start those without a shell (upstream builds the desktop
+   app on macOS, where they are programs, so it never met this) */
+const tool = (command, args, options) => execFileSync(command, args, { shell: process.platform === 'win32', ...options });
+const pack = (dir) => tool('npm', ['pack', '--ignore-scripts', '--pack-destination', work, '--silent'], { cwd: dir, encoding: 'utf8' }).trim().split('\n').pop();
 const dependencies = { ...pkg.dependencies, openfilm: `file:../${pack(protocol)}` };
 /* npm takes the versions pnpm's lockfile has (locked-versions.mjs): what the tests ran with, not the latest */
-const lockedTree = JSON.parse(execFileSync('pnpm', ['list', '--prod', '--depth', 'Infinity', '--json'], { cwd: desktop, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }))[0];
+const lockedTree = JSON.parse(tool('pnpm', ['list', '--prod', '--depth', 'Infinity', '--json'], { cwd: desktop, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }))[0];
 writeFileSync(join(stage, 'package.json'), `${JSON.stringify({
   name: 'openfilm-desktop',
   productName: NAME,
   ...(preview ? { openfilmFlavor: 'preview' } : {}),
   version: pkg.version,
   description: pkg.description,
-  author: 'OpenFilm',
+  author: 'Zfilm',
   license: 'UNLICENSED',
   private: true,
   type: 'module',
@@ -105,7 +112,9 @@ writeFileSync(join(stage, 'package.json'), `${JSON.stringify({
   dependencies,
   overrides: lockedOverrides(lockedTree, pkg.dependencies),
 }, null, 2)}\n`);
-run('npm', ['install', '--omit=dev', '--omit=optional', '--no-audit', '--no-fund', '--no-package-lock', '--loglevel=error'], { cwd: stage });
+/* `--ignore-scripts`: every package staged here is ready-made JavaScript (no native build, and openfilm's UI is
+   already built into `studio/ui/dist`), and it sidesteps an npm 11.17 `allow-scripts` config some machines carry */
+tool('npm', ['install', '--omit=dev', '--omit=optional', '--ignore-scripts', '--no-audit', '--no-fund', '--no-package-lock', '--loglevel=error'], { cwd: stage, stdio: 'inherit' });
 const offLock = versionsOffLock(lockedTree, join(stage, 'node_modules'));
 if (offLock.length) {
   throw new Error(`The installer's packages are not the lockfile's:\n${offLock.map((p) => `  ${p.name} ${p.version} (locked: ${p.locked.join(', ')})`).join('\n')}`);
@@ -159,9 +168,9 @@ await builder.build({
       deleteAppDataOnUninstall: false,
       artifactName: `${NAME.replace(' ', '-')}-Setup-\${arch}.\${ext}`,
     },
-    appId: preview ? 'dev.openfilm.desktop.preview' : 'dev.openfilm.desktop',
+    appId: preview ? 'dev.zfilm.desktop.preview' : 'dev.zfilm.desktop',
     productName: NAME,
-    copyright: 'Copyright © 2026 OpenFilm',
+    copyright: 'Copyright © 2026 Zfilm',
     electronVersion,
     asar: true,
     /* run by Electron as Node from outside the archive: the CLI the agents run, the agents' adapters */
@@ -192,7 +201,7 @@ await builder.build({
       entitlements: join(desktop, 'build/entitlements.mac.plist'),
       entitlementsInherit: join(desktop, 'build/entitlements.mac.plist'),
       /* what macOS says when Studio's record button first asks for the microphone (the entitlement above lets it) */
-      extendInfo: { NSMicrophoneUsageDescription: 'OpenFilm records sound from the microphone when you press Record.' },
+      extendInfo: { NSMicrophoneUsageDescription: 'Zfilm records sound from the microphone when you press Record.' },
       ...(unsigned ? { identity: null } : { identity: IDENTITY, notarize: true }),
     },
     /* the downloads keep one name from version to version: the website links the latest release's by it */
@@ -227,7 +236,7 @@ function adHocSign(context) {
   execFileSync('codesign', ['--force', '--deep', '--sign', '-', join(context.appOutDir, `${NAME}.app`)], { stdio: 'inherit' });
 }
 
-/** OpenFilm.exe's icon and version, as rcedit would write them. */
+/** Zfilm.exe's icon and version, as rcedit would write them. */
 async function windowsResources(context) {
   const ResEdit = await import('resedit');
   const PE = await import('pe-library');
@@ -241,8 +250,8 @@ async function windowsResources(context) {
   info.setFileVersion(major, minor, patch, 0, 1033);
   info.setProductVersion(major, minor, patch, 0, 1033);
   info.setStringValues({ lang: 1033, codepage: 1200 }, {
-    ProductName: 'OpenFilm', FileDescription: 'OpenFilm', CompanyName: 'OpenFilm', OriginalFilename: 'OpenFilm.exe',
-    InternalName: 'OpenFilm', LegalCopyright: 'Copyright © 2026 OpenFilm', FileVersion: pkg.version, ProductVersion: pkg.version,
+    ProductName: 'Zfilm', FileDescription: 'Zfilm', CompanyName: 'Zfilm', OriginalFilename: 'Zfilm.exe',
+    InternalName: 'Zfilm', LegalCopyright: 'Copyright © 2026 Zfilm', FileVersion: pkg.version, ProductVersion: pkg.version,
   });
   info.outputToResourceEntries(res.entries);
   res.outputResource(exe);

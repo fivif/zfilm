@@ -5,7 +5,7 @@
  *
  *   node scripts/library-sounds.mjs [name …]
  *
- * Every sound here is the OpenFilm contributors' own and is CC0, as the rest of library/ (library/LICENSE.md).
+ * Every sound here is the Zfilm contributors' own and is CC0, as the rest of library/ (library/LICENSE.md).
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';

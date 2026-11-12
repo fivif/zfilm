@@ -69,7 +69,8 @@ export function useSavedListing(on: boolean): MediaListing | null {
     if (!on) return undefined;
     const back = () => refreshSaved();
     window.addEventListener('focus', back);
-    return () => window.removeEventListener('focus', back);
+    window.addEventListener('zfilm-library-import-change', back);
+    return () => { window.removeEventListener('focus', back); window.removeEventListener('zfilm-library-import-change', back); };
   }, [on]);
   /* each media file's length and size, as a project's are probed */
   React.useEffect(() => {

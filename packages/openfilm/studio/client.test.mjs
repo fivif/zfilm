@@ -30,7 +30,7 @@ test('the CLI starts one Studio in the background, reuses it, and it cleans up w
   const said = [];
   const first = await ensureStudio((line) => said.push(line));
   try {
-    assert.deepEqual(said, ['Starting OpenFilm Studio…']);
+    assert.deepEqual(said, ['Starting Zfilm Studio…']);
     const again = await ensureStudio((line) => said.push(line));
     assert.equal(again.pid, first.pid, 'the running one is reused');
     assert.equal(said.length, 1);
@@ -70,7 +70,7 @@ test('an older Studio is replaced, and one whose run.json was lost is still foun
   const studio = await ensureStudio((line) => said.push(line));
   try {
     assert.deepEqual(quits, ['old'], 'the older one was asked to stop');
-    assert.match(said[0], /^Updating OpenFilm Studio to /);
+    assert.match(said[0], /^Updating Zfilm Studio to /);
     assert.equal(studio.origin, `http://127.0.0.1:${port}`, 'the new one takes its port: pages open on it reconnect');
     assert.equal(studio.key, readFileSync(join(home, 'key'), 'utf8'), 'with the machine\'s key');
     rmSync(join(home, 'run.json'));

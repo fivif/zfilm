@@ -11,7 +11,7 @@
  * An index read from a file on this computer (trying a new one) has its posters and previews served by Studio from
  * the folder it is in (`/api/examples/file/<path>`), so they show before the repository has them.
  *
- * GitHub's index shows at once: OpenFilm comes with a copy of it and its posters (examples-index, `pnpm examples:sync`),
+ * GitHub's index shows at once: Zfilm comes with a copy of it and its posters (examples-index, `pnpm examples:sync`),
  * and the last one read is kept in Studio's home. Those are shown while GitHub is asked in the background (Studio asks
  * as it starts), and a poster the copy has is served from it, so a slow or blocked GitHub costs no wait.
  *
@@ -32,7 +32,7 @@ const DEFAULT_REPO = { owner: 'openfilm', repo: 'examples', branch: 'main' };
 const KEEP_MS = 10 * 60 * 1000;
 const RETRY_MS = 60 * 1000;
 const NAME = /^[\w.-]+$/;
-/** The copy of GitHub's index and its posters that comes with OpenFilm (`pnpm examples:sync`). */
+/** The copy of GitHub's index and its posters that comes with Zfilm (`pnpm examples:sync`). */
 export const BUNDLED_INDEX = fileURLToPath(new URL('../../examples-index/', import.meta.url));
 /** Where the last index read from GitHub is kept, for the next start. */
 const savedIndex = (/** @type {string} */ home) => join(home, 'cache', 'examples-index.json');
@@ -73,7 +73,7 @@ export function readExamples(raw, source = EXAMPLES_INDEX) {
   for (const entry of index.examples.slice(0, 50)) {
     if (!entry || typeof entry !== 'object' || !repoPath(entry.folder) || typeof entry.title !== 'string' || !entry.title.trim()) continue;
     const local = !/^https?:\/\//.test(source);
-    /* GitHub's index: a poster the copy that came with OpenFilm has is served from it */
+    /* GitHub's index: a poster the copy that came with Zfilm has is served from it */
     const bundled = source === EXAMPLES_INDEX ? (/** @type {string} */ v) => existsSync(join(BUNDLED_INDEX, ...v.split('/'))) : () => false;
     const media = (/** @type {unknown} */ v) => (typeof v === 'string' && /^https:\/\//.test(v) ? v
       : !repoPath(v) ? null
@@ -104,7 +104,7 @@ export function readExamples(raw, source = EXAMPLES_INDEX) {
  */
 export function exampleFile(path, { source = process.env.OPENFILM_EXAMPLES_INDEX || EXAMPLES_INDEX } = {}) {
   if (!repoPath(path)) return null;
-  /* GitHub's index: the posters of the copy that came with OpenFilm */
+  /* GitHub's index: the posters of the copy that came with Zfilm */
   if (source === EXAMPLES_INDEX) return existsSync(join(BUNDLED_INDEX, ...path.split('/'))) ? join(BUNDLED_INDEX, ...path.split('/')) : null;
   if (/^https?:\/\//.test(source)) return null;
   return join(dirname(source), ...path.split('/'));
@@ -116,7 +116,7 @@ const cache = new Map();
 /** @type {Map<string, Promise<Example[]>>} */
 const reading = new Map();
 
-/** An index kept on disk (the last read, or the copy that came with OpenFilm), as examples; null when there is none. @param {string} file */
+/** An index kept on disk (the last read, or the copy that came with Zfilm), as examples; null when there is none. @param {string} file */
 function indexAt(file) {
   try { return readExamples(JSON.parse(readFileSync(file, 'utf8')), EXAMPLES_INDEX); } catch { return null; }
 }
@@ -124,7 +124,7 @@ function indexAt(file) {
 /**
  * The examples, read from the index (cached a while). Never fails: an index that cannot be read is no examples.
  * GitHub's index never waits on GitHub when there is one to show: the last read (here, then in Studio's home), else
- * the copy that came with OpenFilm, while GitHub is asked in the background.
+ * the copy that came with Zfilm, while GitHub is asked in the background.
  * @param {{ source?: string, fetchImpl?: typeof fetch, home?: string }} [options]
  */
 export async function listExamples({ source = process.env.OPENFILM_EXAMPLES_INDEX || EXAMPLES_INDEX, fetchImpl = fetch, home = studioHomeDir() } = {}) {

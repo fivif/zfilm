@@ -30,11 +30,11 @@ test('an agent\'s preview pane: another engine, no WebGL, blocked storage, each 
 });
 
 test('the whole report: the computer\'s, the browser\'s, then the app\'s when there is one', () => {
-  const text = fullReport('OpenFilm doctor\n\n✓ Node      v22', chrome, 'OpenFilm desktop 0.1.8');
+  const text = fullReport('Zfilm doctor\n\n✓ Node      v22', chrome, 'Zfilm desktop 0.1.8');
   const parts = text.split('\n\n────────\n\n');
   assert.equal(parts.length, 3);
-  assert.match(parts[0], /^OpenFilm doctor/);
+  assert.match(parts[0], /^Zfilm doctor/);
   assert.match(parts[1], /^Browser Studio is open in/);
-  assert.equal(parts[2], 'OpenFilm desktop 0.1.8');
+  assert.equal(parts[2], 'Zfilm desktop 0.1.8');
   assert.equal(fullReport('x', chrome, null).split('────────').length, 2);
 });

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // @ts-check
 /**
- * `npm run dev`: Studio from this checkout, beside an installed OpenFilm. Its state and exports are in .dev/
- * (git-ignored), its projects in the same library as every OpenFilm's (the one ~/.openfilm says, by default
- * ~/Movies/OpenFilm/Projects on macOS), and it listens on port 4848 (OPENFILM_STUDIO_PORT for another). The editor is rebuilt when
+ * `npm run dev`: Studio from this checkout, beside an installed Zfilm. Its state and exports are in .dev/
+ * (git-ignored), its projects in the same library as every Zfilm's (the one ~/.openfilm says, by default
+ * ~/Movies/Zfilm/Projects on macOS), and it listens on port 4848 (OPENFILM_STUDIO_PORT for another). The editor is rebuilt when
  * studio/ui changes (reload the page); Studio restarts when studio/server or src change. It opens a sample project in
  * your browser (OPENFILM_NO_BROWSER=1: it only prints the address). Ctrl+C stops it all.
  *
@@ -74,7 +74,7 @@ if (!existsSync(join(SAMPLE, 'film.html'))) {
   body { margin: 0; width: 1920px; height: 1080px; background: #0b0d12; display: grid; place-items: center; }
   h1 { font: 700 120px system-ui, sans-serif; color: #fff; }
 </style>
-<h1 id="title">Hello, OpenFilm</h1>
+<h1 id="title">Hello, Zfilm</h1>
 <script type="module">
 const title = document.getElementById('title');
 window.film = {

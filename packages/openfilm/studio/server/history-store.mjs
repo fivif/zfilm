@@ -69,8 +69,8 @@ const gitEnv = (/** @type {string} */ root, /** @type {string} */ gitDir, /** @t
   ...process.env,
   GIT_DIR: gitDir,
   GIT_WORK_TREE: root,
-  GIT_AUTHOR_NAME: 'OpenFilm Studio', GIT_AUTHOR_EMAIL: 'studio@openfilm.local',
-  GIT_COMMITTER_NAME: 'OpenFilm Studio', GIT_COMMITTER_EMAIL: 'studio@openfilm.local',
+  GIT_AUTHOR_NAME: 'Zfilm Studio', GIT_AUTHOR_EMAIL: 'studio@openfilm.local',
+  GIT_COMMITTER_NAME: 'Zfilm Studio', GIT_COMMITTER_EMAIL: 'studio@openfilm.local',
   GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0',
   ...extra,
 });

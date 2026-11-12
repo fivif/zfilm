@@ -1,11 +1,11 @@
 // @ts-check
 /**
  * The person's own services: any HTTP service, on this computer or elsewhere (a transcription server they run, their
- * own voice, a cloud API OpenFilm has no provider for), added in Settings → Services with its address, a key when it
+ * own voice, a cloud API Zfilm has no provider for), added in Settings → Services with its address, a key when it
  * takes one, where the key goes, and a few words about what it does.
  *
  * `openfilm get call` sends a request to one through Studio, which adds the key (the agent never sees it) and lands
- * what comes back: a file under assets/<service>/, or text and JSON as they are, for the agent to read. OpenFilm knows
+ * what comes back: a file under assets/<service>/, or text and JSON as they are, for the agent to read. Zfilm knows
  * nothing about what a service answers; the agent does, from the person's words and the service's own docs. The key
  * goes where the agent writes {key} (a header, the path's query), as the docs say; else as `Authorization: Bearer`
  * (or where the person once said, `auth`).
@@ -46,7 +46,7 @@ function kept(raw) {
   const s = /** @type {Record<string, unknown>} */ (raw);
   if (typeof s.id !== 'string' || typeof s.name !== 'string' || typeof s.url !== 'string') return null;
   return {
-    /* what a newer OpenFilm keeps on a service stays with it */
+    /* what a newer Zfilm keeps on a service stays with it */
     ...unknownOf(s),
     id: s.id, name: s.name, url: s.url,
     ...(typeof s.key === 'string' && s.key ? { key: s.key } : {}),
@@ -55,7 +55,7 @@ function kept(raw) {
   };
 }
 
-/** A service's fields this OpenFilm does not know (a newer one's). @param {Record<string, unknown>} s */
+/** A service's fields this Zfilm does not know (a newer one's). @param {Record<string, unknown>} s */
 const unknownOf = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => !['id', 'name', 'url', 'key', 'auth', 'note'].includes(k)));
 
 /** The services kept in the settings file. @param {unknown} raw @returns {CustomService[]} */

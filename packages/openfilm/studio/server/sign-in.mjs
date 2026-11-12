@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Connecting a provider by signing in on its website instead of pasting a key (a provider's `signIn`: OpenFilm's), as
+ * Connecting a provider by signing in on its website instead of pasting a key (a provider's `signIn`: Zfilm's), as
  * a native app signs in (PKCE, RFC 7636 and 8252):
  *
  *   1. A one-off listener on 127.0.0.1 (a free port), and the provider's connect page opened in the person's browser

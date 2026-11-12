@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 const packaged = Boolean(process.versions.electron) && !process.defaultApp;
 
 export const FLAVORS = Object.freeze({
-  release: { productName: 'OpenFilm', bundleId: 'dev.openfilm.desktop', studioPort: 4747, studioHome: null, library: null, sharedHome: null },
+  release: { productName: 'Zfilm', bundleId: 'dev.zfilm.desktop', studioPort: 4747, studioHome: null, library: null, sharedHome: null },
   preview: {
     productName: 'OpenFilm Preview', bundleId: 'dev.openfilm.desktop.preview', studioPort: 4777,
     studioHome: join(homedir(), '.openfilm-preview'), library: null, sharedHome: join(homedir(), '.openfilm'),

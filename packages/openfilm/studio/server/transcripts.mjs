@@ -29,7 +29,7 @@ import { alignTranslation, replacePiece, segmentLine } from './subtitle-segments
  */
 
 /** The note at the top of a transcript whose lines are each one subtitle, as the person cut them. */
-export const CUT_NOTE = 'NOTE Each cue is one subtitle, as cut by hand in OpenFilm Studio.';
+export const CUT_NOTE = 'NOTE Each cue is one subtitle, as cut by hand in Zfilm Studio.';
 const CUT_NOTE_RE = /^NOTE Each cue is one subtitle\b/;
 
 /** The transcript of `src` (a path in the project), in `language` when given: its translation. @param {string} src @param {string} [language] */
@@ -426,7 +426,7 @@ function firstAfter(marks, at) {
 
 /**
  * Chinese and Japanese as they are written: no space beside a full-width mark, none between two characters of a
- * script written without them (`OpenFilm， 说一 句话` → `OpenFilm，说一句话`); a space between Han and Latin, or in
+ * script written without them (`Zfilm， 说一 句话` → `Zfilm，说一句话`); a space between Han and Latin, or in
  * Korean, stays. Services that transcribe put spaces where the speaker paused. Full-width marks: CJK symbols and
  * full-width forms; written without spaces: Han and kana.
  * @param {string} t

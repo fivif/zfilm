@@ -703,7 +703,7 @@ export const WHITE_PAGE = `<!doctype html>
 </head>
 <body>
 <script>
-/* a still white picture, under a dip to white (OpenFilm Studio's Transitions) */
+/* a still white picture, under a dip to white (Zfilm Studio's Transitions) */
 window.film = { frame() {} };
 </script>
 </body>

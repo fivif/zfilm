@@ -1,7 +1,7 @@
 /**
  * The assets drawer's library (in the app's panel, over the chat, its composer under it), laid out as an editor's
  * library is: the categories along the top — the media (the project's and Saved, the media pane as it was), the
- * skills an agent takes up (SkillsPane), the voices to speak a voice-over in, then OpenFilm's own sounds, music, text,
+ * skills an agent takes up (SkillsPane), the voices to speak a voice-over in, then Zfilm's own sounds, music, text,
  * the captions a caption track is made with (CaptionsPane), stickers, filters, effects and transitions (lib/library) — and down the left the starred ones and the library's own,
  * its groups under it. What is shown is in
  * the accent color; a category's icon fills faintly too.
@@ -34,7 +34,7 @@ import { isClipMotion } from '@/lib/clip-presets';
 import { useLibraryArrangement } from './arrangement';
 
 type Category = 'media' | 'skill' | 'voice' | 'captions' | LibraryCategory;
-/* OpenFilm's order (the person's own in Settings › Advanced, lib/library-categories): the media, the skills, then the
+/* Zfilm's order (the person's own in Settings › Advanced, lib/library-categories): the media, the skills, then the
    templates, the most a film is made with at once */
 export const CATEGORIES: Category[] = ['media', 'skill', 'template', 'captions', 'voice', 'sound', 'music', 'text', 'sticker', 'filter', 'effect', 'transition'];
 
@@ -463,7 +463,7 @@ export function LibraryDrawer({ media, mediaScope, onMediaScope, mediaRequest, a
               </>
             ) : cat === 'skill' ? (
               <>
-                {/* Installed first opened, in parts by whose they are (SkillsPane); the starred; Discover, OpenFilm's to take up */}
+                {/* Installed first opened, in parts by whose they are (SkillsPane); the starred; Discover, Zfilm's to take up */}
                 <SideBox on={skillLine === 'installed'} onClick={() => pickGroup('installed')}>{t('assetDrawer.skillsInstalled')}</SideBox>
                 <SideBox on={skillLine === 'favorites'} onClick={() => pickGroup(FAVORITES)}>{t('assetDrawer.favorites')}</SideBox>
                 <SideBox on={skillLine === 'discover'} onClick={() => pickGroup('discover')}>{t('assetDrawer.skillsDiscover')}</SideBox>
@@ -768,7 +768,7 @@ function AddButton({ item, onAdd, className }: { item: LibraryItem; onAdd: () =>
 }
 
 /** A template's clips for the person's own pictures, and how long it runs. */
-/** Where a thing of the library comes from: the community's when someone sent it (`by`), else OpenFilm's own. */
+/** Where a thing of the library comes from: the community's when someone sent it (`by`), else Zfilm's own. */
 const sourceOf = (item: LibraryItem): Source => (item.by ? 'community' : 'official');
 
 function TemplateBadge({ item }: { item: LibraryItem }) {

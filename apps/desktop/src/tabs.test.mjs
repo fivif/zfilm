@@ -96,3 +96,18 @@ test('a project is gone for its tab when it is off the list or its folder is; mi
   tabs.closeProjects(tabs.list().map((t) => t.projectId).filter((id) => projectGone(projects, id)));
   assert.deepEqual(tabs.list().map((t) => t.projectId).sort(), ['here', 'rewriting']);
 });
+
+test('pages kept behind the one in front are capped: the ones left longest go first, and never a busy tab', () => {
+  let t = 0;
+  const tabs = createTabs({ newId: ids(), now: () => t });
+  for (const projectId of ['A', 'B', 'C', 'D']) { tabs.open({ projectId }); t += 1000; }
+  /* D is in front; A, B, C were each shown 1s before the next, so A is the one left longest */
+  assert.deepEqual(tabs.warmBeyond(2), [tabs.byProject('A').id], 'two kept: B and C, so A goes');
+  assert.deepEqual(tabs.warmBeyond(3), [], 'three kept: all of them stay');
+  assert.deepEqual(tabs.warmBeyond(9), [], 'more kept than there are');
+  tabs.setAgents(['A']);
+  assert.deepEqual(tabs.warmBeyond(1), [tabs.byProject('B').id], 'a tab an agent works in keeps its page');
+  tabs.setAgents([]);
+  tabs.report(tabs.byProject('B').id, { exporting: 0.5 });
+  assert.deepEqual(tabs.warmBeyond(0), [tabs.byProject('A').id, tabs.byProject('C').id], 'an export keeps its page too');
+});

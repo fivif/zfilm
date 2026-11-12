@@ -11,8 +11,8 @@
     },
     {
       "folder": "openfilm-intro",
-      "title": "OpenFilm intro",
-      "description": "The 1:42 film that introduces OpenFilm, made with OpenFilm: footage, app recordings and motion graphics cut to a Chinese voice-over.",
+      "title": "Zfilm intro",
+      "description": "The 1:42 film that introduces Zfilm, made with Zfilm: footage, app recordings and motion graphics cut to a Chinese voice-over.",
       "poster": "openfilm-intro/look.jpg",
       "duration": "1:42"
     }

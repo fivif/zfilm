@@ -17,7 +17,7 @@ import { SERVICE_VERBS, offered, providerOrder, useProviders, type OwnProvider, 
 import { Popover } from '@/components/Popover';
 import { ProviderMark } from './ProviderMark';
 import { AddProviderDialog, KIND_ICON, ProviderDialog, ServicesBar } from './ProvidersSection';
-import { SettingsGroup, SettingsItem, SettingsPage } from './ui';
+import { SettingsGroup, SettingsItem, SettingsPage, SettingsSegmented } from './ui';
 import { CustomServices } from './CustomServices';
 import { LocalModelsChip, LocalModelsDialog } from './LocalModels';
 import { useLocalModels } from '@/lib/local-models';
@@ -68,31 +68,28 @@ export function ModelsSection() {
 }
 
 /**
- * OpenFilm's library searched by what is meant: OpenFilm's service (src/library-semantic.mjs, free, no account), on
- * by default, or none (the library's words alone).
+ * The library searched by what is meant (src/library-semantic.mjs: the words of the search go to Zfilm's own service,
+ * free and with no account) or by its words alone. A choice of its own, not a service's: the search is what this
+ * setting turns on and off, and off means nothing leaves this computer.
  */
 function LibraryRow({ hook }: { hook: ProvidersHook }) {
   const t = useT();
-  const openfilm = hook.state?.providers.find((p) => p.id === 'openfilm');
-  if (!openfilm) return null;
+  if (!hook.state) return null;
   const label = t('settings.models.library.title');
-  const only: Choice = { value: 'openfilm:library', provider: 'openfilm', name: t('settings.models.library.engine'), model: '' };
   return (
     <SettingsItem
       mark={<FolderSearch size={17} strokeWidth={1.75} />}
       title={label}
       description={t('settings.models.library.about')}
       control={(
-        <ModelPicker
+        <SettingsSegmented<'meaning' | 'words'>
           label={label}
-          connected={[openfilm]}
-          waiting={[]}
-          choicesOf={() => [only]}
-          current={hook.state?.librarySearch ? only : null}
-          busy={hook.busy === 'library-search'}
-          empty={t('settings.models.none')}
-          onPick={(choice) => void hook.setLibrarySearch(choice !== null)}
-          onConnect={() => {}}
+          value={hook.state.librarySearch ? 'meaning' : 'words'}
+          options={[
+            { value: 'meaning', label: t('settings.models.library.byMeaning') },
+            { value: 'words', label: t('settings.models.library.wordsOnly') },
+          ]}
+          onChange={(next) => { if ((next === 'meaning') !== Boolean(hook.state?.librarySearch)) void hook.setLibrarySearch(next === 'meaning'); }}
         />
       )}
     />

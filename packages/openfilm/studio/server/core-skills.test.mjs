@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startStudio } from './server.mjs';
 
-test("Studio lists OpenFilm's own skills first, in their order, installed, and only turned off", async (t) => {
+test("Studio lists Zfilm's own skills first, in their order, installed, and only turned off", async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'of-core-skills-'));
   const variables = { OPENFILM_HOME: join(root, 'home'), OPENFILM_SHARED_HOME: join(root, 'shared'), OPENFILM_LIBRARY: join(root, 'library'), OPENFILM_SKILLS: join(root, 'mine') };
   const previous = Object.fromEntries(Object.keys(variables).map((key) => [key, process.env[key]]));

@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * OpenFilm Studio's server: one process for the whole editor. Two origins, so a web page can never reach the editor:
+ * Zfilm Studio's server: one process for the whole editor. Two origins, so a web page can never reach the editor:
  *
  *   http://127.0.0.1:<port>      the editor's pages and its API. The API needs the launch key: as a cookie, set by
  *                                any page's address with ?key=… (/open?key=… too), or as `x-studio-key` (the CLI).
@@ -47,7 +47,6 @@ import { pickFiles, pickFolder } from './folder-picker.mjs';
 import { readPrefs, writePrefs } from './prefs.mjs';
 import { ensureProxies, playChecks } from './proxies.mjs';
 import { ensurePreviews, knownLate } from './preview-cache.mjs';
-import { npmOpenfilm, olderThanThis } from '../client.mjs';
 import { createWatchers } from './watch.mjs';
 import { projectMissing } from './project-presence.mjs';
 import { installedFonts } from './fonts.mjs';
@@ -63,6 +62,7 @@ import { moveToTrash } from './trash.mjs';
 import { coreSkills, keeps, listSkills, offeredSkills, removeSkill, setSkillCover, setSkillOn, skillOrigins, skillsOff, thisPlatform } from '../../src/skills.mjs';
 import { catalogSkills, installSkill, installedStanding, readCatalog, readDiscover, seedCatalog, uninstallSkill } from './skill-catalog.mjs';
 import { freshProviders, providersRoute } from './providers/index.mjs';
+import { librarySyncRoute } from './library-sync.mjs';
 import { localModelsRoute } from './local-models.mjs';
 import { captionRoutes, writeSubtitleStyle } from './captions.mjs';
 import { projectSettingsRoute, readProjectSettings } from './project-settings.mjs';
@@ -102,8 +102,8 @@ const DESKTOP_FILES = (() => { try { return String(JSON.parse(readFileSync(new U
  */
 export function desktopInstaller(os, arch, base = DESKTOP_FILES) {
   if (!base || (arch !== 'arm64' && arch !== 'x64')) return null;
-  if (os === 'mac') return `${base}/mac/${arch}/OpenFilm-${arch}.dmg`;
-  if (os === 'win') return `${base}/win/${arch}/OpenFilm-Setup-${arch}.exe`;
+  if (os === 'mac') return `${base}/mac/${arch}/Zfilm-${arch}.dmg`;
+  if (os === 'win') return `${base}/win/${arch}/Zfilm-Setup-${arch}.exe`;
   return null;
 }
 
@@ -137,7 +137,7 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
   let pageCame = () => {};
   /** media being made for an agent's `openfilm get` right now (it would be lost, and paid for, if Studio stopped) */
   let making = 0;
-  /** the update run from the top bar: `{ status: 'updating' | 'failed', version, error? }` (see /api/update) */
+  /** kept for the shape of /api/version; this tree never starts an update run */
   let updating = /** @type {{ status: 'updating' | 'failed', version: string, error?: string } | null} */ (null);
   /** whether an app's agent is working in the project at `path` now */
   const agentIn = (/** @type {string} */ path) => working().some((folder) => resolve(folder) === resolve(path));
@@ -245,7 +245,7 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
       if (whenIdle && exports.busy()) return json(res, 409, { error: 'an export is running' });
       if (whenIdle && making) return json(res, 409, { error: 'media is being made' });
       /* not busy, but kept (423, not 409: the app asks its own Studio whether it is busy this way) */
-      if (stays) return json(res, 423, { error: 'it is the OpenFilm app\'s, which keeps it' });
+      if (stays) return json(res, 423, { error: 'it is the Zfilm app\'s, which keeps it' });
       json(res, 200, { pages: editorPages.size });
       setImmediate(() => (onQuit ?? (() => { void studio.close(); }))());
       return;
@@ -280,11 +280,10 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
       return json(res, 200, { project, url: address, pages: open });
     }
 
-    /* this Studio's version, and the latest on npm (Settings → General; `?check=1` asks npm now) */
+    /* this Studio's version. This tree has no update check: nothing asks npm and `newer` is always false, so
+       Settings → General and the top bar never offer a version this build would not be. */
     if (parts[0] === 'version' && parts.length === 1 && req.method === 'GET') {
-      const now = url.searchParams.get('check') === '1';
-      const { latest, checkedAt } = await npmOpenfilm({ force: now, waitMs: 4000 });
-      return json(res, 200, { version: VERSION, latest, newer: Boolean(latest && olderThanThis(VERSION, latest)), checkedAt, checking: !process.env.OPENFILM_NO_UPDATE_CHECK && !FROM_SOURCE, source: FROM_SOURCE,
+      return json(res, 200, { version: VERSION, latest: null, newer: false, checkedAt: null, checking: false, source: FROM_SOURCE,
         ...(updating ? { update: updating } : {}) });
     }
     /* Settings → Developer's diagnostic report: `openfilm doctor` (src/doctor.mjs), as this Studio sees the computer */
@@ -306,18 +305,10 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
       reveal(made.path);
       return json(res, 200, made);
     }
-    /* the top bar's Update (Studio run with npm, not the app's nor a checkout): the newest openfilm run in the
-       background as `openfilm update` (client.mjs updateOpenfilm), which starts Studio again on it; the pages come back
-       on the new version and reload. Not while an export runs or media is made. `/api/version` says how it goes */
+    /* No self-update, in this tree: a new build is installed over this one, so the top bar's Update answers that and
+       nothing is downloaded or started in the background. */
     if (parts[0] === 'update' && parts.length === 1 && req.method === 'POST') {
-      if (stays || FROM_SOURCE) return json(res, 409, { error: 'this Studio does not update itself', code: stays ? 'app' : 'source' });
-      if (exports.busy()) return json(res, 409, { error: 'an export is running', code: 'exporting' });
-      if (making) return json(res, 409, { error: 'media is being made', code: 'making' });
-      if (updating?.status === 'updating') return json(res, 202, { update: updating });
-      const { latest } = await npmOpenfilm({ waitMs: 4000 });
-      if (!latest || !olderThanThis(VERSION, latest)) return json(res, 409, { error: 'this is the newest openfilm', code: 'newest' });
-      updating = runUpdate(latest, (next) => { updating = next; });
-      return json(res, 202, { update: updating });
+      return json(res, 409, { error: 'this build does not update itself: install a new build over it', code: 'no-updates' });
     }
     /* the fonts installed here (what a web page can draw with, in the preview and the export alike) */
     if (parts[0] === 'fonts' && parts.length === 1 && req.method === 'GET') return json(res, 200, { fonts: await installedFonts() });
@@ -330,6 +321,8 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
       if (to) openBrowser(to);
       return json(res, 200, {});
     }
+    /* the library whole on this computer, how far the fetching got, and what to fetch (Settings → Library) */
+    if (parts[0] === 'library' && parts.length === 2) return librarySyncRoute(req, res, parts[1]);
     /* ── own keys and who makes each kind of media (Settings → Services): never a key back; see providers/index.mjs ── */
     if (parts[0] === 'providers') return providersRoute(req, res, parts.slice(1), { openBrowser });
     /* the models that run on this computer (Settings → Services → Local services; local-models.mjs) */
@@ -424,7 +417,7 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
         return res.end(jpeg);
       }
     }
-    /* OpenFilm's library (library.mjs): what is in it, its voices, its files (a poster, a preview, a page, a sound, a waveform, a voice's sample), and
+    /* Zfilm's library (library.mjs): what is in it, its voices, its files (a poster, a preview, a page, a sound, a waveform, a voice's sample), and
        the things the person starred */
     if (parts[0] === 'library') {
       if (parts.length === 1 && req.method === 'GET') {
@@ -520,7 +513,7 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
       const folder = await exampleFolderHere(decodeURIComponent(parts[1]));
       return sendMedia(req, res, inside(folder, parts.slice(3).map(decodeURIComponent).join('/')), { keep: true });
     }
-    /* the skills a project can be made with (../../src/skills.mjs): OpenFilm's own first (`core`, which can only be
+    /* the skills a project can be made with (../../src/skills.mjs): Zfilm's own first (`core`, which can only be
        turned off), then the project's, the person's, those installed, then Discover's not installed (skill-catalog.mjs,
        `installed: false`). Each is told by its uid (owner/name) here and in every route below, so two of the same name
        are both there; `as` is the name agents are given it by. An installed one says when Discover has a newer commit
@@ -547,7 +540,7 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
           ...(agentsCall.has(k.uid) ? { as: agentsCall.get(k.uid) } : {}),
           ...(k.shown ? { shown: k.shown } : {}), ...(k.version ? { version: k.version } : {}), ...(k.kind ? { kind: k.kind } : {}),
           ...(k.order != null ? { order: k.order } : {}), ...(k.icon ? { icon: k.icon } : {}), ...(k.repository ? { repository: k.repository } : {}),
-          /* what it needs beyond OpenFilm, the computers it runs on, and whether this one is not among them */
+          /* what it needs beyond Zfilm, the computers it runs on, and whether this one is not among them */
           ...(k.needs ? { needs: k.needs } : {}), ...(k.platforms ? { platforms: k.platforms, ...(k.platforms.includes(thisPlatform()) ? {} : { elsewhere: true }) } : {}),
           ...(k.cover ? { cover: `${media(k.uid, 'cover')}${id ? '&' : '?'}v=${encodeURIComponent(k.cover)}` } : {}), ...(k.preview ? { preview: media(k.uid, 'preview') } : {}),
           /* the person's own: where it came from (none kept: made where it is) */
@@ -571,7 +564,7 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
         throw new HttpError(502, `Discover could not be read now: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    /* a skill of the project shown (`?project=`), or the library's, by its uid; OpenFilm's own with `core` */
+    /* a skill of the project shown (`?project=`), or the library's, by its uid; Zfilm's own with `core` */
     const skillAt = async (/** @type {string} */ uid, { core = false } = {}) => {
       const id = url.searchParams.get('project');
       const project = id ? (await listProjects()).find((p) => p.id === id && !p.missing) : null;
@@ -1266,7 +1259,7 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
   await listenLocal(editor, port);
   /* the examples index is asked for as Studio starts, so the Examples tab has GitHub's newest when it opens */
   void listExamples().catch(() => {});
-  /* and what each service offers (OpenFilm's models are its service's to say), so Settings → Services opens with them */
+  /* and what each service offers (Zfilm's models are its service's to say), so Settings → Services opens with them */
   void freshProviders().catch(() => {});
   const address = /** @type {import('node:net').AddressInfo} */ (editor.address());
   origin = `http://127.0.0.1:${address.port}`;
@@ -1350,34 +1343,6 @@ async function outerProject(path) {
   return found ? { id: found.id, name: found.name ?? basename(around), folder: basename(resolve(path)) } : null;
 }
 
-/**
- * `npx -y openfilm@<version> update` in the background (its words in logs/update.log), as the person would run it: the
- * newest stops this Studio and starts itself in its place. `then` hears it failed later, with its last words, if this
- * Studio is still here to hear it; one that cannot start is said at once.
- * @param {string} version @param {(state: { status: 'failed', version: string, error: string }) => void} then
- * @returns {{ status: 'updating' | 'failed', version: string, error?: string }}
- */
-function runUpdate(version, then) {
-  const logs = join(studioHome(), 'logs');
-  mkdirSync(logs, { recursive: true });
-  const file = join(logs, 'update.log');
-  writeFileSync(file, '');
-  const failed = (/** @type {string} */ error) => then({ status: 'failed', version, error });
-  try {
-    const out = openSync(file, 'a');
-    const child = spawn('npx', ['-y', `openfilm@${version}`, 'update'], {
-      detached: true, stdio: ['ignore', out, out], windowsHide: true, shell: process.platform === 'win32', env: { ...process.env, OPENFILM_NO_BROWSER: '1' },
-    });
-    child.once('error', (e) => failed(`npx did not start (it comes with Node.js): ${e.message}`));
-    child.once('exit', (code) => {
-      if (code === 0) return;
-      const said = readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).pop() ?? '';
-      failed(said || `npx stopped (${code})`);
-    });
-    child.unref();
-  } catch (e) { return { status: 'failed', version, error: e instanceof Error ? e.message : String(e) }; }
-  return { status: 'updating', version };
-}
 
 /** This package's version: the CLI replaces a Studio older than itself. */
 export const VERSION = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
@@ -1415,7 +1380,7 @@ function sendEditor(/** @type {Res} */ res, /** @type {string} */ dir, /** @type
   const page = join(root, 'index.html');
   /* no referrer: the page's address holds the key, and a link it opens must not carry it to another site */
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', ...headers });
-  res.end(existsSync(page) ? readFileSync(page) : '<!doctype html><meta charset="utf-8"><title>OpenFilm Studio</title><p>The editor is not built: run <code>npm run build:ui</code>.</p>');
+  res.end(existsSync(page) ? readFileSync(page) : '<!doctype html><meta charset="utf-8"><title>Zfilm Studio</title><p>The editor is not built: run <code>npm run build:ui</code>.</p>');
 }
 
 /** A file in the system's file manager, selected. */

@@ -1,6 +1,6 @@
 ---
 name: edit
-description: How an OpenFilm film is made, and how to see it. Read it whole before you make or change a film, its film.html or its pages, and before you look at one.
+description: How a Zfilm film is made, and how to see it. Read it whole before you make or change a film, its film.html or its pages, and before you look at one.
 ---
 
 # Making a film

@@ -5,7 +5,7 @@
  * finds a farewell on strings with no word in common. library-search.mjs merges its order with the keyword search's,
  * by reciprocal rank.
  *
- * The comparing is OpenFilm's service's (`POST /v1/library/search` on openfilm.dev, or OPENFILM_API_URL: free, no
+ * The comparing is Zfilm's service's (`POST /v1/library/search` on openfilm.dev, or OPENFILM_API_URL: free, no
  * account, the words of the search and nothing else): it keeps the model and every thing's vector, so this computer
  * keeps only the library's catalog and its keyword index, and downloads and runs no model. Offline, the service not
  * answering, or turned off in Settings → Services (Library search: None): the keyword search alone.
@@ -58,13 +58,13 @@ export function passageOf(item, vocab, group) {
 }
 
 /** How long a search waits for the service before it goes on with keywords alone. */
-export const SEARCH_TIMEOUT_MS = 2500;
+export const SEARCH_TIMEOUT_MS = 7000;
 /** What was asked lately, and what the service said (a Studio running asks the same again as the person types). */
 const asked = new Map();
 
 /**
  * The things of the category `cat` nearest in meaning to what was asked, the nearest first, at most `limit`: [id,
- * cosine], as OpenFilm's service ranks them. Null when it does not answer in time, or answers something else.
+ * cosine], as Zfilm's service ranks them. Null when it does not answer in time, or answers something else.
  * @param {string} query @param {string} cat @param {number} [limit]
  * @returns {Promise<[string, number][] | null>}
  */

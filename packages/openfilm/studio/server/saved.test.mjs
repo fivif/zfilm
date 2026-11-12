@@ -170,7 +170,7 @@ test('the clips of two pages brought from one project: the files of each, under 
   for (const f of ['assets/logo.png', 'assets/v.mp4', 'pages/other.html']) assert.ok(existsSync(join(root, 'pasted/Launch', f)), f);
 });
 
-test('a filter of OpenFilm\'s library is taken as its layer page under the filter\'s own name', async () => {
+test('a filter of Zfilm\'s library is taken as its layer page under the filter\'s own name', async () => {
   const root = mkdtempSync(join(tmpdir(), 'of-saved-filter-'));
   const taken = /** @type {{ clip: { src: string } }} */ (await takeSaved(root, 'openfilm/filters/bw'));
   assert.equal(taken.clip.src, 'saved/openfilm/filters-bw/layer.html');

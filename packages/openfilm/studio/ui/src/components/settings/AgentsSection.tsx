@@ -37,7 +37,7 @@ import { agentMark } from '@/lib/provider-marks';
 import { SettingsSelect } from './SettingsSelect';
 import { SettingsButton, SettingsField, SettingsGroup, SettingsInset, SettingsItem, SettingsLinkButton, SettingsPage, SettingsStatus, SettingsSwitch, settingsError } from './ui';
 import { AgentConnectionHelp } from './AgentConnectionHelp';
-import { OpenFilmAgentDialog } from './OpenFilmAgentDialog';
+import { ZfilmAgentDialog } from './ZfilmAgentDialog';
 
 function useHostAgents(): HostAgent[] | null {
   const [agents, setAgents] = React.useState<HostAgent[] | null>(null);
@@ -416,7 +416,7 @@ export function AgentsSection() {
   const helpDiagnosis = diagnosis?.id === help ? diagnosis : null;
   const helpError = helpAgent ? error?.id === help ? error.text : helpAgent.error ?? (helpAgent.problem ? `${t('settings.agents.unreadable')} ${helpAgent.problem}` : undefined) : undefined;
   const byId = (id: HostAgentId) => list.find((a) => a.id === id);
-  /* always listed: Codex, Claude Code, OpenFilm and your own key; the others appear here once switched on */
+  /* always listed: Codex, Claude Code, Zfilm and your own key; the others appear here once switched on */
   const always = (['codex', 'claude', 'openfilm', 'byok'] as const).map(byId).filter((a): a is HostAgent => Boolean(a));
   const others = list.filter((a) => OWN.includes(a.id) && !always.includes(a));
   const more = others.filter((a) => !a.shown).sort((a, b) => (MORE_ORDER[a.id] ?? 2) - (MORE_ORDER[b.id] ?? 2));
@@ -431,7 +431,7 @@ export function AgentsSection() {
         {[...always, ...others.filter((a) => a.shown)].map((a) => row(a))}
       </SettingsGroup>
       {more.length ? <SettingsGroup title={t('settings.agents.groupMore')}>{more.map((a) => row(a, false))}</SettingsGroup> : null}
-      {openfilmOpen && openfilmAgent ? <OpenFilmAgentDialog agent={openfilmAgent} onClose={() => setOpenfilmOpen(false)}
+      {openfilmOpen && openfilmAgent ? <ZfilmAgentDialog agent={openfilmAgent} onClose={() => setOpenfilmOpen(false)}
         connectionStatus={dialogStatus(openfilmAgent)}
         connectionError={error?.id === 'openfilm' ? error.text : openfilmAgent.error}
         actions={openfilmAgent.status === 'ready' ? <>

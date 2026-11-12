@@ -122,9 +122,9 @@ test('new projects go to the library as Untitled, Untitled 2', async () => {
 test('new projects go to the folder chosen in Settings; those made before stay where they are', async () => {
   const before = await createProject('Before');
   mkdirSync(process.env.OPENFILM_HOME, { recursive: true });
-  writeFileSync(join(process.env.OPENFILM_HOME, 'prefs.json'), JSON.stringify({ projectsFolder: join(scratch, 'D', 'OpenFilm', 'Projects') }));
+  writeFileSync(join(process.env.OPENFILM_HOME, 'prefs.json'), JSON.stringify({ projectsFolder: join(scratch, 'D', 'Zfilm', 'Projects') }));
   const after = await createProject('After');
-  assert.ok(after.path.startsWith(join(realpathSync(scratch), 'D', 'OpenFilm', 'Projects')), after.path);
+  assert.ok(after.path.startsWith(join(realpathSync(scratch), 'D', 'Zfilm', 'Projects')), after.path);
   const listed = await listProjects();
   assert.equal(listed.find((p) => p.id === before.id)?.path, before.path, 'the one made before is listed where it is');
   assert.equal(listed.find((p) => p.id === before.id)?.missing, false);
@@ -238,7 +238,7 @@ test('a moved project is located: same id and place in the list, its history wit
   assert.equal((await openProject(join(scratch, 'q2'))).id, q.id, 'opened again, it is the same project');
 });
 
-test('what a newer OpenFilm keeps in studio.json stays when this one writes it', async () => {
+test('what a newer Zfilm keeps in studio.json stays when this one writes it', async () => {
   mkdirSync(process.env.OPENFILM_HOME, { recursive: true });
   writeFileSync(join(process.env.OPENFILM_HOME, 'studio.json'), JSON.stringify({ recent: [], folders: [], pinned: ['abc'] }));
   await openProject(join(scratch, 'Launch'));

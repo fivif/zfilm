@@ -40,9 +40,6 @@ importers:
       diff:
         specifier: 9.0.0
         version: 9.0.0
-      electron-updater:
-        specifier: 6.8.9
-        version: 6.8.9
       openfilm:
         specifier: workspace:*
         version: link:../../packages/openfilm
@@ -116,9 +113,15 @@ importers:
 
   packages/openfilm:
     dependencies:
+      https-proxy-agent:
+        specifier: 9.1.0
+        version: 9.1.0
       playwright-core:
         specifier: 1.61.1
         version: 1.61.1
+      socks-proxy-agent:
+        specifier: 10.1.0
+        version: 10.1.0
     devDependencies:
       '@fontsource-variable/inter':
         specifier: ^5.3.0
@@ -1248,6 +1251,9 @@ packages:
   '@smithy/core@3.35.2':
     resolution: {integrity: sha512-ejTukBuP/Pg3t9N8Ux+0zKsXeHWm7p6W3HbXFOyltKasSxZwCFmvTut7kBdZSCF3m9y1bXXyVu6p2xuMFcsTyQ==}
     engines: {node: '>=18.0.0'}
+    deprecated: |-
+      Deprecated due to a bug in custom logger data redaction. Upgrade to the latest version. If you used a custom logger with this
+        version, review your logs and rotate any credentials or other secrets. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
 
   '@smithy/credential-provider-imds@4.5.2':
     resolution: {integrity: sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==}
@@ -1911,9 +1917,6 @@ packages:
   electron-to-chromium@1.5.452:
     resolution: {integrity: sha512-cVvk1YBSj6571VmV6hdJTqj94Y79xSu8cj6Y9t6ae4Y4431z8/7EJFvu3rVp90xhfuv9BpPKUmaLfTo4+FOGBg==}
 
-  electron-updater@6.8.9:
-    resolution: {integrity: sha512-ZhVxM9iGONUpZGI1FxdMRgJjUFXi7AYGVa5PwKlO1tV1/4zDxQmfKpXOHVztKrd6L9rLcFjERvi1Mf2vxyTkig==}
-
   electron-winstaller@5.4.0:
     resolution: {integrity: sha512-bO3y10YikuUwUuDUQRM4KfwNkKhnpVO7IPdbsrejwN9/AABJzzTQ4GeHwyzNSrVO+tEH3/Np255a3sVZpZDjvg==}
     engines: {node: '>=8.0.0'}
@@ -2515,13 +2518,6 @@ packages:
     resolution: {integrity: sha512-t7hw9pI+WvuwNJXwk5zVHpyhIqzg2qTlklJOf0mVxGSbe3Fp2VieZcduNYjaLDoy6p9uGpQEGWG87WpMKlNq8g==}
     engines: {node: '>=8'}
 
-  lodash.escaperegexp@4.1.2:
-    resolution: {integrity: sha512-TM9YBvyC84ZxE3rgfefxUWiQKLilstD6k7PTGt6wfbtXF8ixIJLOL3VYyV/z+ZiPLsVxAsKAFVwWlWeb2Y8Yyw==}
-
-  lodash.isequal@4.5.0:
-    resolution: {integrity: sha512-pDo3lu8Jhfjqls6GkMgpahsF9kCyayhgykjyLMNFTKWrpVdAQtYyB4muAMWozBB4ig/dtWAmsMxLEI8wuz+DYQ==}
-    deprecated: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
-
   lodash.startcase@4.4.0:
     resolution: {integrity: sha512-+WKqsK294HMSc2jEbNgpHpd0JfIBhp7rEV4aqXWqFr6AlXov+SlcgB1Fv01y2kGe3Gc8nMW7VA0SrGuSkRfIEg==}
 
@@ -3120,6 +3116,18 @@ packages:
     resolution: {integrity: sha512-g9Q1haeby36OSStwb4ntCGGGaKsaVSjQ68fBxoQcutl5fS1vuY18H3wSt3jFyFtrkx+Kz0V1G85A4MyAdDMi2Q==}
     engines: {node: '>=8'}
 
+  smart-buffer@4.2.0:
+    resolution: {integrity: sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==}
+    engines: {node: '>= 6.0.0', npm: '>= 3.0.0'}
+
+  socks-proxy-agent@10.1.0:
+    resolution: {integrity: sha512-WlMj/67cEJ6MDI1OcsnjuYKDNDoyPCCYZ249kuuXPiMDw9F8PXkVaQ7YWu3siTydfQ/4BEZcvGzu+aYvz7dDCQ==}
+    engines: {node: '>= 20'}
+
+  socks@2.8.10:
+    resolution: {integrity: sha512-e0VyvkVTwVYViNovRkZ9aodhxVlyoMn7eJhVUPxZ+eK9P/7CBkxvvsBOHqFPEH416726W8tLXXXjKwqgTErrCQ==}
+    engines: {node: '>= 10.0.0', npm: '>= 3.0.0'}
+
   source-map-js@1.2.2:
     resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
@@ -3201,9 +3209,6 @@ packages:
 
   tiny-async-pool@1.3.0:
     resolution: {integrity: sha512-01EAw5EDrcVrdgyCLgoSPvqznC0sVxDSVeiOz09FUpjh71G79VCqneOr+xvt7T1r76CF6ZZfPjHorN2+d+3mqA==}
-
-  tiny-typed-emitter@2.1.0:
-    resolution: {integrity: sha512-qVtvMxeXbVej0cQWKqVSSAHmKZEHAvxdF8HEUBFWts8h+xEo5m/lEiPakuyZ3BnCBjOD8i24kzNOiOLLgsSxhA==}
 
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
@@ -5544,19 +5549,6 @@ snapshots:
 
   electron-to-chromium@1.5.452: {}
 
-  electron-updater@6.8.9:
-    dependencies:
-      builder-util-runtime: 9.7.0
-      fs-extra: 10.1.0
-      js-yaml: 4.3.2
-      lazy-val: 1.0.5
-      lodash.escaperegexp: 4.1.2
-      lodash.isequal: 4.5.0
-      semver: 7.7.4
-      tiny-typed-emitter: 2.1.0
-    transitivePeerDependencies:
-      - supports-color
-
   electron-winstaller@5.4.0:
     dependencies:
       '@electron/asar': 3.4.1
@@ -6214,10 +6206,6 @@ snapshots:
     dependencies:
       p-locate: 4.1.0
 
-  lodash.escaperegexp@4.1.2: {}
-
-  lodash.isequal@4.5.0: {}
-
   lodash.startcase@4.4.0: {}
 
   lodash@4.18.1: {}
@@ -6777,6 +6765,21 @@ snapshots:
 
   slash@3.0.0: {}
 
+  smart-buffer@4.2.0: {}
+
+  socks-proxy-agent@10.1.0:
+    dependencies:
+      agent-base: 9.0.0
+      debug: 4.4.3
+      socks: 2.8.10
+    transitivePeerDependencies:
+      - supports-color
+
+  socks@2.8.10:
+    dependencies:
+      ip-address: 10.7.5
+      smart-buffer: 4.2.0
+
   source-map-js@1.2.2: {}
 
   source-map-support@0.5.21:
@@ -6860,8 +6863,6 @@ snapshots:
   tiny-async-pool@1.3.0:
     dependencies:
       semver: 5.7.2
-
-  tiny-typed-emitter@2.1.0: {}
 
   tinyglobby@0.2.17:
     dependencies:

@@ -10,7 +10,7 @@
  * ffmpeg, updates (preload.cjs). The window opens straight into the last project.
  */
 import { BaseWindow, Menu, Notification, WebContentsView, app, clipboard, dialog, ipcMain, nativeTheme, safeStorage, screen, shell } from 'electron';
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FLAVOR, IDENTITY, PRODUCT_NAME } from './flavor.mjs';
@@ -27,18 +27,19 @@ import { registerLocalAgentIpc } from './local-agents-ipc.mjs';
 import { readPreferences, registerChatIpc } from './chat-ipc.mjs';
 import { registerSkillsIpc } from './skills-ipc.mjs';
 import { createRoster } from './agent-roster.mjs';
-import { createOpenFilmAgent } from './openfilm-agent.mjs';
 import { AGENTS, checkAgentProgram, closeEverySession, diagnoseAgent, forgetAgentStatus, listAgents, localAgent, openAgentInstaller, openAgentSignIn, setChosenPaths, signOutAgent } from './agents.mjs';
 import { agentUsage, forgetAgentUsage } from './agent-usage.mjs';
 import { installOpenfilmCommand } from './openfilm-command.mjs';
 import { startUpdates } from './updates.mjs';
-import { stepAside } from './update-launch.mjs';
 import { ensureFfmpeg, ffmpegDir, ffmpegDownloadable, ffmpegIn, ffmpegOnPath } from './ffmpeg-runtime.mjs';
 import { PATH_SEP } from './environment.mjs';
 import { firstWindowsApps } from './windows-apps.mjs';
 import { createTabs, projectGone } from './tabs.mjs';
 import { turnNotice } from './turn-notices.mjs';
 import { restartDelay } from './studio-restart.mjs';
+import { savedRoot } from 'openfilm/locations';
+import { createLibraryImportService } from './library-import-service.mjs';
+import { createMediaAnalyzer } from './library-agent-analysis.mjs';
 
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 const mac = process.platform === 'darwin';
@@ -64,7 +65,41 @@ if (mac) {
 app.setName(PRODUCT_NAME);
 /* Windows shows a notification only for the app ID the Start menu shortcut carries: the installer's appId (release.mjs) */
 if (windows) app.setAppUserModelId(IDENTITY.bundleId);
-app.setPath('userData', IDENTITY.userData ?? join(app.getPath('appData'), PRODUCT_NAME));
+/* The app's own folder under the old name is taken over, once, before anything is written there: renaming it keeps
+   the window's place and the page's stored state, which a program that only changed its name would lose. */
+/**
+ * Studio's home, and the one it had under the old name taken over: settings, keys and the library's cache are in there,
+ * and a program that only changed its name would open empty beside a folder holding all of it. Entries the new home
+ * already has are left alone; the old folder goes when it is empty.
+ */
+function studioHomeFolder() {
+  const home = app.getPath('home');
+  const after = join(home, '.zfilm');
+  const before = join(home, '.openfilm');
+  if (!existsSync(after) || !existsSync(before)) {
+    if (!existsSync(after) && existsSync(before)) { try { renameSync(before, after); } catch { return before; } }
+    return after;
+  }
+  try {
+    for (const name of readdirSync(before)) {
+      if (existsSync(join(after, name))) continue;
+      try { renameSync(join(before, name), join(after, name)); } catch { /* leave it where it is */ }
+    }
+    if (!readdirSync(before).length) rmdirSync(before);
+  } catch { /* kept as it is */ }
+  return after;
+}
+
+function takeOverDataFolder() {
+  const appData = app.getPath('appData');
+  const after = join(appData, PRODUCT_NAME);
+  const before = join(appData, 'openfilm');
+  if (after === before || existsSync(after) || !existsSync(before)) return after;
+  try { renameSync(before, after); } catch { return before; }
+  return after;
+}
+
+app.setPath('userData', IDENTITY.userData ?? takeOverDataFolder());
 const DATA = app.getPath('userData');
 const LOGS = join(DATA, 'logs');
 mkdirSync(LOGS, { recursive: true });
@@ -72,10 +107,6 @@ const log = (line) => { try { appendFileSync(join(LOGS, 'studio.log'), line); } 
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
-} else if (mac && app.isPackaged && stepAside({ dir: DATA, version: app.getVersion(), bundleId: IDENTITY.bundleId, execPath: process.execPath, argv: process.argv })) {
-  /* opened while the update quitting started is being installed: running now would stop it, so the new version opens
-     when it is done (update-launch.mjs) */
-  app.exit(0);
 } else {
   app.on('second-instance', () => focusWindow());
   app.whenReady().then(start).catch((error) => {
@@ -98,8 +129,11 @@ const activeView = () => views.get(pagePresentation?.currentId() ?? tabs?.active
 const broadcast = (channel, value) => { for (const v of views.values()) if (!v.webContents.isDestroyed()) v.webContents.send(channel, value); };
 /** the tab whose page this is, or null */
 const tabOf = (contents) => { for (const [id, v] of views) if (v.webContents === contents) return id; return null; };
-/** a tab behind for this long lets its page go (it comes back when shown), unless an agent works in it or it exports */
-const IDLE_PAGE_MS = 5 * 60_000;
+/** a tab behind keeps its page for two hours (switching back to it is then instant), unless an agent works in it or it
+    exports: upstream let it go after five minutes, and every switch back loaded a whole Studio again */
+const IDLE_PAGE_MS = 2 * 60 * 60_000;
+/** ...and at most this many pages are kept behind the one in front: each is a whole Studio in a renderer of its own */
+const WARM_PAGES = 3;
 /** How long the tabs of projects gone are gathered before they close together (several pages told at once). */
 const GONE_TOGETHER_MS = 150;
 /** @type {Awaited<ReturnType<typeof startWindowStudio>> | null} */
@@ -117,6 +151,7 @@ let quitting = false;
 let cancelWindowClose = () => {};
 /** @type {ReturnType<typeof registerLocalAgentIpc> | null} */
 let localAgents = null;
+let libraryImports = null;
 /** @type {ReturnType<typeof createRoster> | null} */
 let roster = null;
 
@@ -548,8 +583,8 @@ async function start() {
       updates?.close();
     },
   });
-  /* an update quitting did not install is installed now, before anything else opens (update-launch.mjs) */
-  const launch = await updates.installAtLaunch({ language: state.language });
+  /* no update is ever installed at launch: this tree has none (updates.mjs) */
+  const launch = { installing: false, dismiss: () => {} };
   if (launch.installing) return;
   /* Windows' registered apps, read from now on: the first look at the agents and a conversation reopened at once wait for them */
   if (windows) void firstWindowsApps();
@@ -558,7 +593,11 @@ async function start() {
   const env = childEnvironment({
     shell: shellEnv,
     extra: {
-      OPENFILM_HOME: IDENTITY.studioHome ?? process.env.OPENFILM_HOME ?? join(app.getPath('home'), '.openfilm'),
+      OPENFILM_HOME: IDENTITY.studioHome ?? process.env.OPENFILM_HOME ?? studioHomeFolder(),
+      /* Node's fetch reads the proxy settings only with this on: the library comes from a host many people reach
+         through a proxy, and asking for thousands of files without it would fail where the browser works */
+      ...(process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || process.env.ALL_PROXY
+        ? { NODE_USE_ENV_PROXY: '1' } : {}),
       ...(FLAVOR !== 'release' ? { OPENFILM_ACCOUNT_DEVICE: PRODUCT_NAME } : {}),
       ...((IDENTITY.library ?? process.env.OPENFILM_LIBRARY) ? { OPENFILM_LIBRARY: IDENTITY.library ?? process.env.OPENFILM_LIBRARY } : {}),
       /* a flavour with a home of its own still shares the person's library (src/locations.mjs) */
@@ -690,8 +729,11 @@ async function start() {
   });
   /* Studio's "open this project", heard by each page: settled once here */
   tabHandle('desktop:tabs:open', (_self, { to }) => { openInTabs(to); return { ok: true }; });
-  /* a tab left behind long enough lets its page go; it comes back when shown */
-  setInterval(() => { for (const id of tabs?.idle(IDLE_PAGE_MS) ?? []) dropView(id); }, 60_000).unref?.();
+  /* a tab left behind long enough lets its page go, and so do the ones beyond WARM_PAGES: it comes back when shown */
+  setInterval(() => {
+    const drop = new Set([...(tabs?.idle(IDLE_PAGE_MS) ?? []), ...(tabs?.warmBeyond(WARM_PAGES) ?? [])]);
+    for (const id of drop) dropView(id);
+  }, 60_000).unref?.();
 
   /* the agents: Studio's home and library go with them, so the `openfilm` they run finds this window's Studio */
   /* the person's own skills: Skills/ beside this app's projects (~/Movies/OpenFilm/Skills), as its `openfilm` finds them */
@@ -738,20 +780,7 @@ async function start() {
     log,
   });
   /* Settings → Agents (in Studio's page) and the chat's agent menu: one roster, both told of every change */
-  const openfilmAgent = createOpenFilmAgent({
-    dataDir: DATA,
-    readAccount: (options) => studio.readAccount(options),
-    signIn: () => studioApi('/api/providers/openfilm/sign-in', 'POST'),
-    cancelSignIn: () => studioApi('/api/providers/openfilm/sign-in/cancel', 'POST'),
-    signOut: () => studioApi('/api/providers/openfilm/key', 'DELETE'),
-    closeSessions: () => localAgents?.closeAgent('openfilm'),
-    refreshSessions: () => localAgents?.refreshSkills('openfilm'),
-    onChange: () => { if (roster) broadcast('desktop:agents', roster.list()); },
-  });
-  // Services and Agents may both change the account. Read the shared state even when its settings page is closed.
-  setInterval(() => { void openfilmAgent.refresh(); }, 2000).unref();
   roster = createRoster({
-    openfilm: openfilmAgent,
     dataDir: DATA,
     localAgents: listAgents,
     localAgent,
@@ -779,6 +808,28 @@ async function start() {
   const agentHandle = (channel, fn) => ipcMain.handle(channel, (event, opts) => {
     if (!fromPage(event)) throw new Error('not the window\'s page');
     return fn(opts ?? {});
+  });
+  const validateImportAgent = async (snapshot) => {
+    const selected = roster.list().find(entry => entry.id === snapshot.agent);
+    if (!selected || selected.status !== 'ready' || !selected.shown) throw new Error('The selected agent is not connected. Connect it in Settings → Agents and retry.');
+  };
+  libraryImports = createLibraryImportService({
+    storageRoot: join(DATA, 'library-imports'), libraryRoot: savedRoot(env),
+    validateAgent: validateImportAgent,
+    runAgent: createMediaAnalyzer({
+      ask: (...args) => localAgents.ask(...args), env,
+      ffmpeg: ffmpegHere ? join(ffmpegHere, windows ? 'ffmpeg.exe' : 'ffmpeg') : 'ffmpeg',
+      ffprobe: ffmpegHere ? join(ffmpegHere, windows ? 'ffprobe.exe' : 'ffprobe') : 'ffprobe',
+    }),
+  });
+  libraryImports.subscribe(event => broadcast('desktop:library-import:change', event.job));
+  agentHandle('desktop:library-import:list', () => libraryImports.listJobs());
+  agentHandle('desktop:library-import:retry', ({ id }) => libraryImports.retryFailed(String(id)));
+  agentHandle('desktop:library-import:create', async ({ snapshot }) => {
+    if (!snapshot || typeof snapshot.agent !== 'string') throw new Error('Choose the current agent before importing.');
+    await validateImportAgent(snapshot);
+    const sourceRoot = await pickFolder({ title: appLanguage(state.language) === 'zh-CN' ? '导入素材文件夹' : 'Import media folder', button: appLanguage(state.language) === 'zh-CN' ? '导入并处理' : 'Import and process' });
+    return sourceRoot ? libraryImports.create({ sourceRoot, snapshot }) : null;
   });
   agentHandle('desktop:agents:list', () => { void roster.refresh(); return roster.list(); });
   agentHandle('desktop:agents:refresh', () => roster.recheck());
@@ -816,7 +867,6 @@ async function start() {
     return { ok: true };
   });
   agentHandle('desktop:agents:shown', ({ id, shown }) => { roster.setShown(String(id), shown === true); return { ok: true }; });
-  agentHandle('desktop:agents:openfilm-models', ({ config }) => openfilmAgent.saveModels(config));
   agentHandle('desktop:agents:own-model', ({ config }) => roster.saveOwnModel(config));
   agentHandle('desktop:agents:own-model-remove', ({ id }) => { roster.removeOwnModel(String(id)); return { ok: true }; });
   ipcMain.handle('desktop:reveal', (event, path) => { if (fromPage(event) && typeof path === 'string' && path) shell.showItemInFolder(path); });
@@ -899,6 +949,6 @@ app.on('before-quit', (event) => {
   quitAfterStudio(event, {
     quitting, markQuitting: () => { quitting = true; }, studio,
     /* and the ones opened only to ask (signed in? its options?), which belong to no chat */
-    closeAgents: () => { localAgents?.closeAll(); closeEverySession(); }, quit: () => app.quit(),
+    closeAgents: () => { void libraryImports?.close(); localAgents?.closeAll(); closeEverySession(); }, quit: () => app.quit(),
   });
 });

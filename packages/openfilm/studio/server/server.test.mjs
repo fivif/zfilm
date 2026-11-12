@@ -723,17 +723,17 @@ test('the Desktop button opens the installer for this computer, or the project\'
   assert.equal((await api('/api/desktop', { method: 'POST', body: { os: 'mac', arch: 'arm64' } })).status, 200);
   assert.equal(opened.at(-1), JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).homepage);
   const base = 'https://example.com/download/desktop';
-  assert.equal(desktopInstaller('mac', 'arm64', base), `${base}/mac/arm64/OpenFilm-arm64.dmg`);
-  assert.equal(desktopInstaller('win', 'x64', base), `${base}/win/x64/OpenFilm-Setup-x64.exe`);
+  assert.equal(desktopInstaller('mac', 'arm64', base), `${base}/mac/arm64/Zfilm-arm64.dmg`);
+  assert.equal(desktopInstaller('win', 'x64', base), `${base}/win/x64/Zfilm-Setup-x64.exe`);
   assert.equal(desktopInstaller('linux', 'x64', base), null);
   assert.equal(desktopInstaller('mac', 'ppc', base), null);
   assert.equal(desktopInstaller('mac', 'arm64', ''), null);
 });
 
-test('Settings → General: this Studio\'s version, and whether npm has a newer one', async () => {
+test('Settings → General: this Studio\'s version, and never a newer one (this tree has no update check)', async () => {
   const v = await (await api('/api/version')).json();
   assert.equal(v.version, JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version);
-  assert.equal(typeof v.newer, 'boolean');
+  assert.deepEqual([v.newer, v.latest, v.checking], [false, null, false]);
 });
 
 test('the fonts installed here, for the inspector\'s font menu', async () => {
@@ -850,7 +850,7 @@ test('an app\'s Studio (`stays`) is not stopped by `openfilm open`, and says why
     /* it says it is the app's, so `openfilm update` says the app updates it */
     assert.equal((await (await fetch(`${kept.origin}/api/health`)).json()).app, true);
     const update = await fetch(`${kept.origin}/api/update`, { method: 'POST', headers: { 'x-studio-key': kept.key, 'content-type': 'application/json' }, body: '{}' });
-    assert.deepEqual([update.status, (await update.json()).code], [409, 'app'], 'it does not update itself');
+    assert.deepEqual([update.status, (await update.json()).code], [409, 'no-updates'], 'it does not update itself');
   } finally {
     await kept.close();
   }
@@ -859,7 +859,7 @@ test('an app\'s Studio (`stays`) is not stopped by `openfilm open`, and says why
 test('Update is not run from a source checkout (git pull updates it), nor without the key', async () => {
   assert.equal((await api('/api/update', { method: 'POST', body: {}, key: null })).status, 401);
   const res = await api('/api/update', { method: 'POST', body: {} });
-  assert.deepEqual([res.status, (await res.json()).code], [409, 'source']);
+  assert.deepEqual([res.status, (await res.json()).code], [409, 'no-updates']);
   assert.equal((await (await api('/api/health')).json()).app, undefined, 'not an app\'s');
   assert.equal((await (await api('/api/version')).json()).update, undefined, 'no update running');
 });

@@ -13,7 +13,9 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 /** Studio's home: OPENFILM_HOME, else ~/.openfilm (studio/server/projects.mjs studioHome). */
-const home = () => process.env.OPENFILM_HOME || join(homedir(), '.openfilm');
+import { studioHomeDir } from './locations.mjs';
+
+const home = () => studioHomeDir();
 const file = () => join(home(), 'links.json');
 
 /** @type {{ at: string, mtime: number, places: string[] } | null} */

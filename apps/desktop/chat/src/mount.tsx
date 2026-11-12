@@ -8,8 +8,10 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { app } from './app-bridge';
 import { setLanguage } from './i18n';
+import { useLocalAgents } from './state/local-agent-store';
 
 export async function mountChat(root: HTMLElement) {
+  useLocalAgents.getState().hydrate();
   const hello = await app.hello();
   setLanguage(hello.language);
   app.onLanguage(setLanguage);

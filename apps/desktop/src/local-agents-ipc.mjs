@@ -500,12 +500,19 @@ export function registerLocalAgentIpc(ipcMain, { trusted, binDir = null, fallbac
      * @param {Record<string, string | number | boolean>} [options]
      * @param {import('./studio.mjs').WritingImage[]} [images] @returns {Promise<string>}
      */
-    ask: async (agent, text, signal, options = {}, images = []) => {
+    ask: async (agent, text, signal, options = {}, images = [], observer = {}) => {
       if (!isChatAgent(agent)) throw new Error(`Unknown agent: ${String(agent)}`);
+      signal?.throwIfAborted();
       let said = '';
       const session = new AgentSession({
         agent, cwd: probeFolder(), binDir, fallbackDir, env, harness: await harnessFor(agent), answerOnly: true,
-        onUpdate: (update) => { if (update?.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text') said += update.content.text ?? ''; },
+        onUpdate: (update) => {
+          if (update?.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text') {
+            const chunk = update.content.text ?? '';
+            said += chunk;
+            observer.onText?.(chunk);
+          } else if (update?.sessionUpdate === 'tool_call' && update.title) observer.onActivity?.(String(update.title));
+        },
         onQuestion: async () => null,
       });
       const stop = () => { void session.cancel().catch(() => {}); session.close(); };
@@ -532,7 +539,9 @@ export function registerLocalAgentIpc(ipcMain, { trusted, binDir = null, fallbac
           config = result?.configOptions ?? config;
         }
         signal?.throwIfAborted();
-        await session.prompt([{ type: 'text', text }, ...pictures]);
+        const result = await session.prompt([{ type: 'text', text }, ...pictures]);
+        signal?.throwIfAborted();
+        if ((result?.stopReason ?? result) === 'cancelled') throw new Error('Agent processing was cancelled. Retry to continue.');
         return said;
       } finally {
         signal?.removeEventListener('abort', stop);

@@ -1,7 +1,7 @@
 // @ts-check
 /**
  * The files of the models that run on this computer (Settings → Services → Local services): each model a list of files of
- * the published library, with their size and sha256, fetched together into the library's cache for every OpenFilm
+ * the published library, with their size and sha256, fetched together into the library's cache for every Zfilm
  * here (studio/server/library.mjs fetchLibrary), checked, and kept until the person removes them.
  *
  *   library/local-models.json   { models: [{ id, files: [{ path, bytes, sha256 }] }] }, a runtime file shared by
@@ -131,7 +131,10 @@ export function modelBytesHere(/** @type {ModelEntry} */ m) {
 
 /** The fetch, in a process of its own that outlives what began it. */
 function startFetch(/** @type {ModelEntry} */ m) {
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'fetch', m.id], { detached: true, stdio: 'ignore', windowsHide: true });
+  /* In the desktop app `process.execPath` is the app itself (Zfilm.exe): started as a program it would open a second
+     app and do no fetching at all. ELECTRON_RUN_AS_NODE makes it the Node it also is, which runs this file. */
+  const env = process.versions.electron ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : process.env;
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'fetch', m.id], { detached: true, stdio: 'ignore', windowsHide: true, env });
   /* said at once, so that what asks next finds it coming before it has begun */
   if (child.pid) writeFileSync(stateFile(m), JSON.stringify({ pid: child.pid, at: Date.now() }));
   child.unref();

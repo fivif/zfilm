@@ -73,22 +73,31 @@ export function createPagePresentation({ prepare, resume, present, discard, fall
   };
 }
 
-/** Bound the document load and, where the native view needs it, wait for a paint before showing it. */
+/**
+ * Bound the document load and, where the native view needs it, wait for a paint before showing it.
+ *
+ * A load that is merely slow is not a failed destination. Until 0.3.2 this threw `Page loading timed out`, and
+ * `ensure()` answers a rejected prepare by discarding the view, so a heavy project (a large `.film`, dozens of
+ * clips) that took over `loadTimeoutMs` to load threw the person back to the projects list: the tab was there,
+ * the click did nothing. Now the page is presented while it is still on its way and its frame arrives when it
+ * does; only a destroyed renderer fails.
+ */
 export async function preparePage(contents, url, { loadTimeoutMs = 15_000, waitForPaint = true, ...frameOptions } = {}) {
   let timer;
+  let late = false;
   try {
     await Promise.race([
       contents.loadURL(url),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error('Page loading timed out'));
-          if (!contents.isDestroyed()) contents.stop();
-        }, loadTimeoutMs);
+      new Promise((resolve) => {
+        timer = setTimeout(() => { late = true; resolve(); }, loadTimeoutMs);
       }),
     ]);
   } finally { clearTimeout(timer); }
   if (contents.isDestroyed()) throw new Error('Page closed while loading');
-  if (waitForPaint) await paintPage(contents, frameOptions);
+  /* A native view still needs a paint before it is exposed; a slow load settles for its frame when it lands. */
+  if (waitForPaint) await paintPage(contents, frameOptions).catch((error) => { if (!late) throw error; });
+  /* the load goes on in the page; `late` says the frame shown first is the outgoing one */
+  return { late };
 }
 
 /** Wait for the editor's DOM and a refreshed compositor frame, for new documents and resumed native views alike. */

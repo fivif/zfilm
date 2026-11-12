@@ -9,11 +9,12 @@ import { App } from 'openfilm/studio-ui/App.tsx';
 import { FocusNav } from 'openfilm/studio-ui/components/FocusNav.tsx';
 import { applyStudioHost } from 'openfilm/studio-ui/lib/host.ts';
 import { mountChat } from '../chat/src/mount';
-import { CanvasModelPicker, canvasWritingModel } from '../chat/src/components/ModelPopover';
+import { CanvasModelPicker, canvasWritingModel, libraryImportModel } from '../chat/src/components/ModelPopover';
 import './shell.css';
 import '../chat/src/chat.css';
 
 host.canvasWriting = { Picker: CanvasModelPicker, selection: canvasWritingModel };
+if (host.libraryImport) host.libraryImport.selection = libraryImportModel;
 applyStudioHost();
 createRoot(document.getElementById('root')!).render(<StrictMode><FocusNav /><App /></StrictMode>);
 void mountChat(document.getElementById('of-chat')!);

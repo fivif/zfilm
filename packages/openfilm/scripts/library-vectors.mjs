@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // @ts-check
 /**
- * The library's vectors for semantic search (OpenFilm's service searches them, src/library-semantic.mjs): every thing
+ * The library's vectors for semantic search (Zfilm's service searches them, src/library-semantic.mjs): every thing
  * `openfilm get` searches, what it is (passageOf) turned into a vector by the model, written as library/vectors.i8
  * (int8, 384 a thing) and library/vectors.json (the model, the ids in order, each one's category, each vector's
  * scale); and library/models.json, each file of the model and its runtime with its size and sha256; and the model's

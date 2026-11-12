@@ -1,6 +1,6 @@
 /**
  * Settings › Keyboard shortcuts: the editor's actions (lib/keymap) in tabs (Timeline, Player, Basic, Other), two
- * columns of an action and its keys, and the scheme they come from: OpenFilm, Premiere Pro, Final Cut Pro X, or one of
+ * columns of an action and its keys, and the scheme they come from: Zfilm, Premiere Pro, Final Cut Pro X, or one of
  * three custom ones.
  *
  * A built-in scheme is read-only: clicking a key there copies the scheme into a free custom slot first, and says so.
@@ -21,7 +21,7 @@ import { SettingsSelect } from './SettingsSelect';
 import { SettingsButton, SettingsPage, SettingsSegmented, settingsError } from './ui';
 
 /** The built-in schemes are named for the app whose keys they give. */
-const SCHEME_NAMES: Record<(typeof BUILT_IN_SCHEMES)[number], string> = { openfilm: 'OpenFilm', premiere: 'Premiere Pro', fcp: 'Final Cut Pro X' };
+const SCHEME_NAMES: Record<(typeof BUILT_IN_SCHEMES)[number], string> = { openfilm: 'Zfilm', premiere: 'Premiere Pro', fcp: 'Final Cut Pro X' };
 
 /** A row: its words and keys; `held`: combinations pressed while another is held (K, then J). */
 type Row = { id: string; label: string; keys: readonly string[]; action?: ActionId; held?: readonly (readonly string[])[] };

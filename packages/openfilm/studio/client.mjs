@@ -79,31 +79,16 @@ export function olderThanThis(/** @type {string | undefined} */ version, mine = 
 }
 
 /**
- * What npm has: the latest openfilm (null when it was never learnt) and when it was asked. Asked of the registry at
- * most once a day (the answer kept in Studio's folder) unless `force`, never for more than `waitMs`, and never with
- * `network` false (only what was learnt before). A check that fails is no answer, and nothing else waits on it.
- * OPENFILM_NO_UPDATE_CHECK=1: never asked.
+ * What npm has: nothing, in this tree. Kept with its signature for its callers (Settings → General, the top bar's
+ * Update, `openfilm update`), which now all answer "no newer version" without a request leaving the machine.
  * @param {{ network?: boolean, waitMs?: number, force?: boolean }} [options]
  * @returns {Promise<{ latest: string | null, checkedAt: number | null }>}
  */
 export async function npmOpenfilm({ network = true, waitMs = 1500, force = false } = {}) {
-  if (process.env.OPENFILM_NO_UPDATE_CHECK) return { latest: null, checkedAt: null };
-  const file = join(studioHome(), 'update.json');
-  /** @type {{ checkedAt?: number, latest?: string }} */
-  let known = {};
-  try { known = JSON.parse(readFileSync(file, 'utf8')); } catch { /* never asked */ }
-  if (network && (force || !(Date.now() - (known.checkedAt ?? 0) < 24 * 3_600_000))) {
-    try {
-      const res = await fetch('https://registry.npmjs.org/openfilm/latest', { signal: AbortSignal.timeout(waitMs), headers: { accept: 'application/json' } });
-      const latest = res.ok ? String((await res.json()).version ?? '') : '';
-      if (/^\d+\.\d+\.\d+/.test(latest)) {
-        known = { checkedAt: Date.now(), latest };
-        mkdirSync(studioHome(), { recursive: true });
-        writeFileSync(file, `${JSON.stringify(known)}\n`);
-      }
-    } catch { /* offline, or slow: asked again next time */ }
-  }
-  return { latest: known.latest ?? null, checkedAt: known.checkedAt ?? null };
+  /* No registry request, no update.json, no "a newer openfilm is out" line: this tree updates only when a new build
+     is installed over it. */
+  void network; void waitMs; void force;
+  return { latest: null, checkedAt: null };
 }
 
 /** A newer openfilm on npm than this one, or null (see npmOpenfilm). @param {{ network?: boolean, waitMs?: number }} [options] */
@@ -155,10 +140,10 @@ export async function ensureStudio(say = () => {}, { fresh = false } = {}) {
   let pages = 0;
   if (found) {
     const older = olderThanThis(found.version);
-    say(older ? `Updating OpenFilm Studio to ${VERSION}…` : 'Restarting OpenFilm Studio…');
+    say(older ? `Updating Zfilm Studio to ${VERSION}…` : 'Restarting Zfilm Studio…');
     const replaced = await replace(found);
     if ('stays' in replaced) {
-      say(`OpenFilm Studio keeps running: ${replaced.stays}`);
+      say(`Zfilm Studio keeps running: ${replaced.stays}`);
       return found;
     }
     pages = replaced.pages;
@@ -170,7 +155,7 @@ export async function ensureStudio(say = () => {}, { fresh = false } = {}) {
   let exited = /** @type {number | null} */ (null);
   child.once('exit', (code) => { exited = code ?? 1; });
   child.unref();
-  if (!found) say('Starting OpenFilm Studio…');
+  if (!found) say('Starting Zfilm Studio…');
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     const up = await running();
@@ -196,7 +181,7 @@ export async function ensureStudio(say = () => {}, { fresh = false } = {}) {
 export async function updateOpenfilm(say = () => {}) {
   if (FROM_SOURCE) return { ok: true, lines: [`openfilm ${VERSION} runs from a source checkout: git pull updates it.`] };
   const found = (await running()) ?? (await restarting());
-  if (found?.app) return { ok: true, lines: ['Studio is the OpenFilm app\'s: it updates with the app (OpenFilm → Check for Updates…).'] };
+  if (found?.app) return { ok: true, lines: ['Studio is the Zfilm app\'s: it updates with the app (Zfilm → Check for Updates…).'] };
   const { latest } = await npmOpenfilm({ force: true, waitMs: 8000 });
   if (!latest) return { ok: false, lines: ['Could not reach npm to learn the newest openfilm: try again when online.'] };
   if (olderThanThis(VERSION, latest)) {
@@ -213,7 +198,7 @@ export async function updateOpenfilm(say = () => {}) {
   }
   if (!found) return { ok: true, lines: [`openfilm ${VERSION} is the newest. Studio starts on it the next time it opens.`] };
   if (!olderThanThis(found.version)) return { ok: true, lines: [`openfilm ${VERSION} is the newest, and Studio runs it.`] };
-  say(`Updating OpenFilm Studio from ${found.version} to ${VERSION}…`);
+  say(`Updating Zfilm Studio from ${found.version} to ${VERSION}…`);
   const replaced = await replace(found);
   if ('stays' in replaced) return { ok: false, lines: [`Studio keeps running ${found.version} for now: ${replaced.stays}. Update again once that is done.`] };
   await ensureStudio(say);
@@ -344,7 +329,7 @@ export async function canvasCommand(args, say) {
 
 /**
  * `openfilm get [verb] [--option value …] [--yes]`: media for the project around the current folder, made by Studio
- * (started when needed), or found in OpenFilm's own library here (src/library-search.mjs LIBRARY_VERBS, offline and
+ * (started when needed), or found in Zfilm's own library here (src/library-search.mjs LIBRARY_VERBS, offline and
  * free). Without a verb (or with --help): what can be got here now, the library first. `--via <provider>` and
  * `--model <id>` override the person's choices in Studio's Settings (Models) for one run; the listing leaves them
  * out, as it leaves out who makes what. `code` is the exit status: 0 done, 1 it did not run, 2 not a project or a wrong
@@ -373,7 +358,7 @@ export async function getMedia(argv, say) {
   const { help, via, model, yes, ...args } = flags;
   if (via !== undefined && typeof via !== 'string') return { code: 2, lines: ['openfilm get: --via names a provider, e.g. --via elevenlabs'] };
   if (model !== undefined && typeof model !== 'string') return { code: 2, lines: ['openfilm get: --model names a model, e.g. --model eleven_v4'] };
-  /* OpenFilm's own library: searched here, offline and free, with no Studio (src/library-search.mjs) */
+  /* Zfilm's own library: searched here, offline and free, with no Studio (src/library-search.mjs) */
   const library = await import('../src/library-search.mjs');
   if (verb && verb in library.LIBRARY_VERBS && help === undefined) {
     /* a Studio running keeps the library and its model loaded: it answers a search in milliseconds; asked only when
@@ -422,7 +407,7 @@ export async function getMedia(argv, say) {
   const where = one || !services ? [] : ['', services];
   const width = Math.max(...[...free, ...verbs].map((v) => v.verb.length));
   const first = one ? [] : [
-    'Free, offline, from OpenFilm\'s own library (CC0): search it first, and make only what it does not have.',
+    'Free, offline, from Zfilm\'s own library (CC0): search it first, and make only what it does not have.',
     ...lines(free, width), '',
   ];
   /* nothing connected: what to do instead, and which services there are */

@@ -10,8 +10,8 @@ const seen = [];
 let challenge = '';
 test('development and preview apps use distinct computer names and cannot replace the installed app login', () => {
   assert.equal(deviceName({}, 'My Mac.local'), 'My Mac');
-  assert.equal(deviceName({ OPENFILM_ACCOUNT_DEVICE: 'OpenFilm Dev' }, 'My Mac.local'), 'My Mac · OpenFilm Dev');
-  assert.equal(deviceName({ OPENFILM_ACCOUNT_DEVICE: 'OpenFilm Preview' }, 'My Mac.local'), 'My Mac · OpenFilm Preview');
+  assert.equal(deviceName({ OPENFILM_ACCOUNT_DEVICE: 'Zfilm Dev' }, 'My Mac.local'), 'My Mac · Zfilm Dev');
+  assert.equal(deviceName({ OPENFILM_ACCOUNT_DEVICE: 'Zfilm Preview' }, 'My Mac.local'), 'My Mac · Zfilm Preview');
   assert.ok(deviceName({ OPENFILM_ACCOUNT_DEVICE: 'x'.repeat(200) }, 'y'.repeat(200)).length <= 60);
 });
 before(async () => {
@@ -31,7 +31,7 @@ before(async () => {
 });
 after(() => site.close());
 
-const provider = () => ({ id: 'openfilm', name: 'OpenFilm', signIn: { page: `${base}/account/connect`, token: `${base}/api/connect/token`, revoke: `${base}/api/connect/revoke` } });
+const provider = () => ({ id: 'openfilm', name: 'Zfilm', signIn: { page: `${base}/account/connect`, token: `${base}/api/connect/token`, revoke: `${base}/api/connect/revoke` } });
 
 /** Signing in, the browser played by `browse` once the connect page was opened. */
 async function signIn(browse) {
@@ -64,7 +64,7 @@ test('a wrong state is not answered; a no in the browser is said, and nothing is
   });
   assert.equal(got, null);
   assert.equal(back.headers.get('location'), `${base}/account/connect?result=failed`);
-  assert.deepEqual(signInState(), { provider: null, error: 'Signing in to OpenFilm was cancelled.', errorFor: 'openfilm' });
+  assert.deepEqual(signInState(), { provider: null, error: 'Signing in to Zfilm was cancelled.', errorFor: 'openfilm' });
 });
 
 test('cancelled while waiting; signing out revokes the key at the provider', async () => {

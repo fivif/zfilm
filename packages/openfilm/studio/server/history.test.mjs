@@ -28,7 +28,7 @@ const project = () => {
 };
 /* who writes the versions an earlier edition made, as Studio does (history-store.mjs): a CI runner has no git identity */
 const gitEnv = (root) => ({ ...process.env, GIT_DIR: join(root, '.film', 'history'), GIT_WORK_TREE: root, GIT_CONFIG_NOSYSTEM: '1',
-  GIT_AUTHOR_NAME: 'OpenFilm Studio', GIT_AUTHOR_EMAIL: 'studio@openfilm.local', GIT_COMMITTER_NAME: 'OpenFilm Studio', GIT_COMMITTER_EMAIL: 'studio@openfilm.local' });
+  GIT_AUTHOR_NAME: 'Zfilm Studio', GIT_AUTHOR_EMAIL: 'studio@openfilm.local', GIT_COMMITTER_NAME: 'Zfilm Studio', GIT_COMMITTER_EMAIL: 'studio@openfilm.local' });
 const gitOut = (root, args, input) => execFileSync('git', args, { cwd: root, env: gitEnv(root), ...(input ? { input } : {}) }).toString();
 /** What a version holds. */
 const tracked = (root, rev = 'HEAD') => gitOut(root, ['ls-tree', '-r', '--name-only', rev]).trim().split('\n').filter(Boolean).sort();

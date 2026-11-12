@@ -3,11 +3,11 @@
  * right as a page of titled groups. General (the theme and the language), Agents (in an app with a chat: the agents
  * it can use), Services (which model makes each kind of media, and the services connected for it), the keyboard
  * shortcuts, Advanced and Developer; the search finds a section by any phrase on it. At the
- * foot of the nav, quietly, where OpenFilm lives: its code, the examples and the website.
+ * foot of the nav, quietly, where Zfilm lives: its code, the examples and the website.
  */
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { X, Settings2, Keyboard, Sun, Moon, Monitor, Boxes, Bot, Search, SquareTerminal, Loader2, SlidersHorizontal } from 'lucide-react';
+import { X, Settings2, Keyboard, Sun, Moon, Monitor, Boxes, Bot, Search, SquareTerminal, Loader2, SlidersHorizontal, HardDriveDownload } from 'lucide-react';
 import { LANGUAGES, phrasesUnder, useLanguage, useLanguageChoice, useT, type LanguageChoice } from '@/i18n';
 import { studioHost, type HostDeveloper, type HostUpdateState } from '@/lib/host';
 import { showWhatsNew } from '@/lib/whats-new';
@@ -18,6 +18,7 @@ import { api, type StudioPrefs, type StudioVersion } from '@/api';
 import { AgentsSection } from './AgentsSection';
 import { DiagnosticsGroup } from './DiagnosticsGroup';
 import { ModelsSection } from './ModelsSection';
+import { LibrarySection } from './LibrarySection';
 import { SettingsSelect } from './SettingsSelect';
 import { ShortcutsSection } from './ShortcutsSection';
 import { SettingsButton, SettingsGroup, SettingsItem, SettingsPage, SettingsSegmented, SettingsSwitch } from './ui';
@@ -26,26 +27,20 @@ import { StorageGroup } from './StorageGroup';
 import { LARGE_DIALOG_SIZE } from '../dialog-chrome';
 import { LibraryCategoriesGroup } from './LibraryCategoriesGroup';
 
-export type SettingsSection = 'general' | 'agents' | 'models' | 'developer' | 'shortcuts' | 'advanced';
+export type SettingsSection = 'general' | 'agents' | 'models' | 'library' | 'developer' | 'shortcuts' | 'advanced';
 
-/* the nav, in groups: what OpenFilm does, then help (Agents only inside an app with a chat: lib/host.ts `agents`;
+/* the nav, in groups: what Zfilm does, then help (Agents only inside an app with a chat: lib/host.ts `agents`;
    Advanced for what is already set for the best experience; Developer always, for its diagnostics) */
 const NAV: Array<{ group: 'settings' | 'help'; sections: SettingsSection[] }> = [
-  { group: 'settings', sections: ['general', ...(studioHost?.agents ? ['agents' as const] : []), 'models'] },
+  { group: 'settings', sections: ['general', ...(studioHost?.agents ? ['agents' as const] : []), 'models', 'library'] },
   { group: 'help', sections: ['shortcuts', 'advanced', 'developer'] },
-];
-
-/** where OpenFilm lives, linked at the foot of the nav */
-const LINKS = [
-  { label: 'settings.links.github', href: 'https://github.com/openfilm/openfilm' },
-  { label: 'settings.links.examples', href: 'https://github.com/openfilm/examples' },
-  { label: 'settings.links.site', href: 'https://openfilm.dev' },
 ];
 
 const SECTION_ICON: Record<SettingsSection, React.ReactNode> = {
   general: <Settings2 size={18} strokeWidth={1.75} />,
   agents: <Bot size={18} strokeWidth={1.75} />,
   models: <Boxes size={18} strokeWidth={1.75} />,
+  library: <HardDriveDownload size={18} strokeWidth={1.75} />,
   developer: <SquareTerminal size={18} strokeWidth={1.75} />,
   shortcuts: <Keyboard size={18} strokeWidth={1.75} />,
   advanced: <SlidersHorizontal size={18} strokeWidth={1.75} />,
@@ -57,6 +52,7 @@ const SECTION_WORDS: Record<SettingsSection, string | string[]> = {
   general: ['settings.appearance', 'settings.storage'],
   agents: 'settings.agents',
   models: ['settings.models', 'settings.providers'],
+  library: 'settings.library',
   developer: ['settings.developer', 'settings.report'],
   shortcuts: 'settings.shortcuts',
   advanced: ['settings.advanced', ...(studioHost?.notifications ? ['settings.notifications'] : []), 'settings.versions', 'settings.playback', 'settings.libraryCategories'],
@@ -172,9 +168,6 @@ export function SettingsModal({ open, onClose, section: opening }: SettingsModal
           ))}
           {found.length === 0 ? <p className="px-2.5 pt-4 text-[14px] text-[var(--text-faint)]">{t('settings.noResults')}</p> : null}
           <div className="mt-auto flex flex-wrap gap-x-4 gap-y-1 px-2.5 pt-6 text-[13px] text-[var(--text-faint)]">
-            {LINKS.map((link) => (
-              <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="rounded-[4px] transition hover:text-[var(--text)]">{t(link.label)}</a>
-            ))}
           </div>
         </nav>
 
@@ -190,6 +183,7 @@ export function SettingsModal({ open, onClose, section: opening }: SettingsModal
             {showing === 'general' && <GeneralSection />}
             {showing === 'agents' && <AgentsSection />}
             {showing === 'models' && <ModelsSection />}
+            {showing === 'library' && <LibrarySection />}
             {showing === 'developer' && <DeveloperSection />}
             {showing === 'shortcuts' && <ShortcutsSection />}
             {showing === 'advanced' && <AdvancedSection />}
@@ -389,7 +383,7 @@ function AboutGroup() {
   return (
     <SettingsGroup title={t('settings.about.group')}>
       <SettingsItem
-        title={info ? `OpenFilm ${info.version}` : 'OpenFilm'}
+        title={info ? `Zfilm ${info.version}` : 'Zfilm'}
         description={status}
         control={inApp || !info?.checking ? null : (
           <SettingsButton disabled={state === 'checking'} onClick={check}>{t('settings.about.check')}</SettingsButton>
@@ -487,7 +481,7 @@ function AppAboutGroup() {
   return (
     <SettingsGroup title={t('settings.about.group')}>
       <SettingsItem
-        title={`OpenFilm ${s?.version ?? ''}`.trim()}
+        title={`Zfilm ${s?.version ?? ''}`.trim()}
         badge={s?.channel === 'beta' ? <span className="rounded-full bg-[var(--bg-field)] px-2 py-0.5 text-[11.5px] text-[var(--text-muted)]">beta</span> : null}
         description={description}
         control={control}

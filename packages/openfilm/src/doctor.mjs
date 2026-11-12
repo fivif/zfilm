@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * `openfilm doctor`: what this computer has for OpenFilm, as text a person pastes into an issue. Studio's Settings →
+ * `openfilm doctor`: what this computer has for Zfilm, as text a person pastes into an issue. Studio's Settings →
  * Developer copies the same report, with what the browser it is open in can do.
  *
  * Each check is a line: what it is, what was found, and when something is wrong, what to do about it. A path under the
@@ -80,7 +80,7 @@ export function formatReport(checks, extra = []) {
   const width = Math.max(...checks.map((c) => c.label.length)) + 2;
   const problems = checks.filter((c) => c.problem);
   return [
-    'OpenFilm doctor',
+    'Zfilm doctor',
     '',
     ...checks.map((c) => `${c.problem ? '✗' : '✓'} ${c.label.padEnd(width)}${c.text}`),
     ...(problems.length ? ['', 'To fix:', ...problems.map((c) => `  ${c.label}: ${c.problem}`)] : ['', 'Nothing to fix.']),
@@ -172,11 +172,11 @@ export async function doctor({ run = 'openfilm', env = process.env, studio = nul
   const at = (/** @type {string} */ path) => tidy(path, home);
 
   const from = FROM_SOURCE ? 'a source checkout' : studio?.app ? 'the desktop app' : 'npm';
-  checks.push({ label: 'OpenFilm', text: `${VERSION} (${from}; run as ${run})` });
+  checks.push({ label: 'Zfilm', text: `${VERSION} (${from}; run as ${run})` });
   checks.push({ label: 'System', text: systemName() });
   const [major, minor] = process.versions.node.split('.').map(Number);
   const oldNode = major < 22 || (major === 22 && minor < 18);
-  checks.push({ label: 'Node', text: `${process.version} (${at(process.execPath)})`, ...(oldNode ? { problem: 'OpenFilm needs Node 22.18 or newer: install it from nodejs.org' } : {}) });
+  checks.push({ label: 'Node', text: `${process.version} (${at(process.execPath)})`, ...(oldNode ? { problem: 'Zfilm needs Node 22.18 or newer: install it from nodejs.org' } : {}) });
 
   const { agents, names } = agentHints(env);
   const term = env.TERM_PROGRAM ? `; terminal ${env.TERM_PROGRAM}` : '';
@@ -219,9 +219,9 @@ export async function doctor({ run = 'openfilm', env = process.env, studio = nul
   const dataOk = !existsSync(data) || writable(data);
   const projectsOk = !existsSync(projects) || writable(projects);
   checks.push({ label: 'Data', text: `${at(data)}${existsSync(data) ? (dataOk ? '' : ' (not writable)') : ' (not made yet)'}`,
-    ...(dataOk ? {} : { problem: `OpenFilm cannot write to ${at(data)}: give your account write access to it` }) });
+    ...(dataOk ? {} : { problem: `Zfilm cannot write to ${at(data)}: give your account write access to it` }) });
   checks.push({ label: 'Projects', text: `${at(projects)}${existsSync(projects) ? (projectsOk ? '' : ' (not writable)') : ' (not made yet)'}${gb(freeSpace(projects))}`,
-    ...(projectsOk ? {} : { problem: `OpenFilm cannot write to ${at(projects)}: choose another folder in Studio's Settings → General` }) });
+    ...(projectsOk ? {} : { problem: `Zfilm cannot write to ${at(projects)}: choose another folder in Studio's Settings → General` }) });
   /* a project's .film is hidden and can hold gigabytes of cache, history and logs: say how much, nowhere else visible.
      Read a project at a time, without holding Studio: Copy report and the diagnostics file call this from the server. */
   const films = libraryProjects(projects);

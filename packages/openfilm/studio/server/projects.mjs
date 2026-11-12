@@ -24,7 +24,7 @@ import { EMPTY_FILM } from './film.mjs';
 import { FILM_FILE, filmHtml } from '../../src/film-doc.mjs';
 import { writeAtomic } from './atomic.mjs';
 import { coverAt } from './cover.mjs';
-import { libraryProjects, libraryRoot } from '../../src/locations.mjs';
+import { libraryProjects, libraryRoot, studioHomeDir } from '../../src/locations.mjs';
 import { projectMissing } from './project-presence.mjs';
 import { compoundOuter } from './parts.mjs';
 
@@ -43,7 +43,7 @@ export class ProjectError extends Error {
 }
 
 /** Where Studio keeps its own state (not projects): ~/.openfilm, or OPENFILM_HOME. */
-export const studioHome = () => process.env.OPENFILM_HOME || join(homedir(), '.openfilm');
+export const studioHome = () => studioHomeDir();
 
 /**
  * The key this machine's Studio opens with (~/.openfilm/key, readable by this user only), the same at every launch: an
@@ -61,7 +61,7 @@ export function studioKey() {
   return key;
 }
 
-/** Where new projects go: the folder chosen in Settings, else ~/Movies/OpenFilm/Projects on macOS, ~/Videos/OpenFilm/Projects elsewhere (src/locations.mjs). */
+/** Where new projects go: the folder chosen in Settings, else ~/Movies/Zfilm/Projects on macOS, ~/Videos/Zfilm/Projects elsewhere (src/locations.mjs). */
 export { libraryRoot };
 
 /**
@@ -92,7 +92,7 @@ export async function readState() {
   } catch { return /** @type {StudioState} */ ({ recent: [], folders: [] }); }
 }
 
-/* the file is shared with every OpenFilm on this computer (`npx openfilm`, the app), older or newer: what this one does
+/* the file is shared with every Zfilm on this computer (`npx openfilm`, the app), older or newer: what this one does
    not know of it is written back as it was */
 async function writeState(/** @type {StudioState} */ state) {
   await mkdir(studioHome(), { recursive: true });

@@ -3,7 +3,7 @@
  * then its title and switch (on, an agent takes it up whenever it fits; off, no agent gets it), kind and version,
  * where it came from, what it does, and what to do with it: Try now (a new conversation with the skill named in its
  * message; installed or not, the skill is given to that conversation only), Install, or uninstalling it (an official
- * one) or moving it to the trash (the person's own, a project's); OpenFilm's system skills are only turned off. Back
+ * one) or moving it to the trash (the person's own, a project's); Zfilm's system skills are only turned off. Back
  * returns to the list. Also here: a skill's words
  * in the language shown, and its cover.
  */
@@ -17,7 +17,7 @@ import { communityOf, makerOf, sourcesApi, type SkillEntry } from '@/lib/project
 import { ConfirmDialog } from './ConfirmDialog';
 import { SettingsSwitch } from './settings/ui';
 
-/** OpenFilm's own by their order, then the community's as Discover's index lists them (an author's own order is not theirs to set). */
+/** Zfilm's own by their order, then the community's as Discover's index lists them (an author's own order is not theirs to set). */
 export const byOrder = (a: SkillEntry, b: SkillEntry) => {
   const ca = communityOf(a), cb = communityOf(b);
   if (ca !== cb) return ca ? 1 : -1;
@@ -145,7 +145,7 @@ export function SkillPage({ skill, setSkills, projectId, onBack, onTry }: {
       {skill.off ? <p className="mt-1.5 text-[12px] text-[var(--text-muted)]">{t('gallery.skillOff')}</p> : null}
       {skill.retired ? <p className="mt-1.5 text-[12px] text-[var(--text-muted)]">{t('gallery.retired')}</p> : null}
       <div className="mt-2 flex items-center gap-2 text-[12px] text-[var(--text-muted)]">
-        {/* the community's: whose it is, their account a link; OpenFilm's own: its kind */}
+        {/* the community's: whose it is, their account a link; Zfilm's own: its kind */}
         {communityOf(skill) ? (
           <span>{t('gallery.byCommunity').split('{owner}')[0]}<a href={`https://github.com/${makerOf(skill)}`} target="_blank" rel="noreferrer"
             className="text-[var(--text)] underline-offset-2 hover:underline">{makerOf(skill)}</a>{t('gallery.byCommunity').split('{owner}')[1]}</span>
@@ -153,7 +153,7 @@ export function SkillPage({ skill, setSkills, projectId, onBack, onTry }: {
         {/* its uid, owner/name: how it is told apart, shared and searched */}
         <span className="min-w-0 truncate font-mono text-[11px] text-[var(--text-faint)]" title={skill.uid}>{skill.uid}</span>
         {skill.version ? <span className="rounded-[5px] border border-[var(--border)] px-1.5 py-[1px] font-mono text-[10.5px] text-[var(--text-muted)]">v{skill.version}</span> : null}
-        {/* its source: OpenFilm's repository, or the address one of the person's came from */}
+        {/* its source: Zfilm's repository, or the address one of the person's came from */}
         {source ? (
           <a href={source} target="_blank" rel="noreferrer" title={source} aria-label={t('gallery.viewSource')}
             className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--text-muted)] transition hover:bg-[var(--bg-hover)] hover:text-[var(--text)]"><Github size={14} strokeWidth={1.75} /></a>
@@ -161,7 +161,7 @@ export function SkillPage({ skill, setSkills, projectId, onBack, onTry }: {
       </div>
       <Origin skill={skill} />
       {words.summary ? <p className="mt-4 text-[13px] leading-[20px] text-[var(--text)]">{words.summary}</p> : null}
-      {/* the computers it runs on, when this one is not among them; what it needs beyond OpenFilm */}
+      {/* the computers it runs on, when this one is not among them; what it needs beyond Zfilm */}
       {skill.elsewhere && skill.platforms ? (
         <p role="note" className="mt-2.5 text-[12.5px] leading-[20px] text-[var(--warn)]">
           {t('gallery.onlyOn').replace('{where}', skill.platforms.map((p) => t(`gallery.platform_${p}`)).join(' / '))}</p>
@@ -185,7 +185,7 @@ export function SkillPage({ skill, setSkills, projectId, onBack, onTry }: {
           <button type="button" onClick={() => onTry(skill)} disabled={skill.off} title={skill.off ? t('gallery.tryOff') : undefined}
             className="flex h-10 w-full items-center justify-center gap-1.5 rounded-[10px] bg-[var(--primary)] text-[13px] font-medium text-[var(--on-primary)] transition hover:bg-[var(--primary-hover)] disabled:opacity-40"><MessageSquarePlus size={15} />{t('gallery.tryNow')}</button>
         ) : null}
-        {/* OpenFilm's system skills are only turned off */}
+        {/* Zfilm's system skills are only turned off */}
         {skill.update && installed ? (
           <button type="button" onClick={update} disabled={working !== null}
             className="flex h-9 w-full items-center justify-center gap-1.5 rounded-[10px] border border-[var(--border-strong)] text-[13px] font-medium text-[var(--text)] transition hover:bg-[var(--bg-hover)] disabled:opacity-50">
@@ -244,7 +244,7 @@ function Origin({ skill }: { skill: SkillEntry }) {
   return (
     <>
       <div title={o.from === 'made' ? undefined : o.address} className="mt-2 flex min-w-0 items-center gap-1.5 text-[11.5px] text-[var(--text-faint)]">{icon}<span className="truncate">{text}</span></div>
-      {/* added from an address, not from Discover: OpenFilm has not looked at it */}
+      {/* added from an address, not from Discover: Zfilm has not looked at it */}
       {o.from === 'link' ? <p className="mt-1 text-[11.5px] leading-[17px] text-[var(--text-muted)]">{t('gallery.unlisted')}</p> : null}
     </>
   );

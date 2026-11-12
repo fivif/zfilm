@@ -202,7 +202,9 @@ test('idle neighbors are evicted even when they are the next close destination',
   assert.equal(f.pages.currentId(), b.id);
 });
 
-test('a hung page load fails without presenting unloaded contents', async () => {
+test('a hung page load is presented, not stopped, and not treated as a failed destination', async () => {
+  // Fork: upstream 0.3.2 rejected here and called stop(), which discarded the view and fell back to the projects
+  // list — "the tab is there and the click does nothing". A load that is still on its way is shown instead.
   const events = [];
   const contents = {
     loadURL: () => new Promise(() => {}),
@@ -210,8 +212,9 @@ test('a hung page load fails without presenting unloaded contents', async () => 
     stop: () => events.push('stop'),
     executeJavaScript: () => events.push('paint'),
   };
-  await assert.rejects(preparePage(contents, 'https://studio.invalid/', { loadTimeoutMs: 5 }), /timed out/);
-  assert.deepEqual(events, ['stop']);
+  const result = await preparePage(contents, 'https://studio.invalid/', { loadTimeoutMs: 5 });
+  assert.equal(result.late, true);
+  assert.deepEqual(events, ['paint']);
 });
 
 test('a rejected load never waits for or presents a frame', async () => {
@@ -345,4 +348,29 @@ test('closing the last tab keeps its frame until cold HOME is ready', async () =
   f.loads.get('home').resolve();
   assert.equal(await home, true);
   assert.deepEqual(f.events.slice(-2), ['present:home', 'discard:last']);
+});
+
+test('a slow load is shown rather than throwing the person back to the projects', async () => {
+  // 0.3.2: loadURL past loadTimeoutMs rejected, ensure() discarded the view, failed() fell back to HOME — the tab
+  // was open and the click did nothing. The page that is on its way is presented instead.
+  const discarded = [];
+  const presented = [];
+  const contents = { isDestroyed: () => false, loadURL: () => new Promise(() => {}), stop() { assert.fail('a slow load is not stopped'); } };
+  const presentation = createPagePresentation({
+    prepare: () => ({ view: { id: 'tab-a' }, ready: preparePage(contents, 'https://studio.invalid/', { loadTimeoutMs: 5 }) }),
+    present: (id) => presented.push(id),
+    discard: (id) => discarded.push(id),
+    fallback: 'home',
+    onError: (error) => assert.fail(`a slow load is not an error: ${error.message}`),
+  });
+  assert.equal(await presentation.show('tab-a'), true);
+  assert.deepEqual(presented, ['tab-a']);
+  assert.deepEqual(discarded, []);
+  assert.equal(presentation.currentId(), 'tab-a');
+});
+
+test('preparePage reports a late load instead of failing it', async () => {
+  const contents = { isDestroyed: () => false, loadURL: () => new Promise(() => {}) };
+  const result = await preparePage(contents, 'https://studio.invalid/', { loadTimeoutMs: 5 });
+  assert.equal(result.late, true);
 });

@@ -7,7 +7,7 @@ import { addSkills } from '../../src/skills.mjs';
 import { skillsCommand } from '../../src/skills-cli.mjs';
 import { startStudio } from './server.mjs';
 
-/** Discover as last read (skill-catalog.mjs): the index naming one skill of OpenFilm's, kept at its commit. */
+/** Discover as last read (skill-catalog.mjs): the index naming one skill of Zfilm's, kept at its commit. */
 function discover(/** @type {string} */ home) {
   const entry = { name: 'replicate', repo: 'https://github.com/openfilm/skill-replicate', path: 'skills/replicate', version: '0.1.0', commit: 'a'.repeat(40) };
   const folder = join(home, 'skill-catalog', 'openfilm', `replicate@${entry.commit}`);

@@ -1,7 +1,7 @@
 // @ts-check
 /**
- * The models that run on this computer: Settings → Services → Local services. Each is fetched from OpenFilm's published
- * library, checked, and kept in the library's cache for every OpenFilm here (src/local-models.mjs); nothing it is given
+ * The models that run on this computer: Settings → Services → Local services. Each is fetched from Zfilm's published
+ * library, checked, and kept in the library's cache for every Zfilm here (src/local-models.mjs); nothing it is given
  * leaves the computer, and it costs nothing. A model is installed or not, and an installed one on or off (off: kept,
  * not used).
  *

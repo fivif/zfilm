@@ -22,8 +22,8 @@ export function projectAround(from) {
 }
 
 const SOURCE = { project: 'this project', mine: 'yours', official: 'installed' };
-/** where one came from, for the list: OpenFilm's own, the community's (by whose it is), yours, or this project's */
-const sourceOf = (/** @type {{ uid: string, source: keyof typeof SOURCE }} */ s) => (s.source !== 'official' ? SOURCE[s.source] : s.uid.startsWith('openfilm/') ? 'installed, OpenFilm\'s' : 'installed, community');
+/** where one came from, for the list: Zfilm's own, the community's (by whose it is), yours, or this project's */
+const sourceOf = (/** @type {{ uid: string, source: keyof typeof SOURCE }} */ s) => (s.source !== 'official' ? SOURCE[s.source] : s.uid.startsWith('openfilm/') ? 'installed, Zfilm\'s' : 'installed, community');
 /** a path as the person reads it: from the current folder when it is under it */
 const shown = (/** @type {string} */ p) => { const r = relative(process.cwd(), p); return r && !r.startsWith('..') ? r : p; };
 

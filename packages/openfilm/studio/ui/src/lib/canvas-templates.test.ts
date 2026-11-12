@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readCanvasDoc } from './canvas.ts';
 import { builtInTemplates } from './canvas-templates.ts';
 
-test('the templates OpenFilm comes with are boards as kept: in their group, wired, every node read', () => {
+test('the templates Zfilm comes with are boards as kept: in their group, wired, every node read', () => {
   for (const template of builtInTemplates((key) => key)) {
     const read = readCanvasDoc(template.doc);
     assert.equal(read.nodes.length, template.doc.nodes.length, template.id);

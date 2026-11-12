@@ -105,8 +105,10 @@ setInterval(() => {}, 1000);
   try {
     const agents = registerLocalAgentIpc({ handle: () => {} }, { trusted: () => true });
     const image = { mimeType: 'image/jpeg', data: 'Y2FudmFz' };
-    const answer = await agents.ask('deepseek', 'Translate: Hello.', undefined, { model: 'b' }, [image]);
+    const streamed = [];
+    const answer = await agents.ask('deepseek', 'Translate: Hello.', undefined, { model: 'b' }, [image], { onText: chunk => streamed.push(chunk) });
     assert.deepEqual(JSON.parse(answer), { lines: ['Hallo.'], refused: 'cancelled', model: 'b', images: [{ type: 'image', ...image }] });
+    assert.equal(streamed.join(''), answer, 'the actual ACP reply is streamed to the import log');
     await assert.rejects(agents.ask('nobody', 'hi'), /Unknown agent/);
     assert.equal(agents.lastAgent(), null, 'a question of Studio\'s is not the chat\'s conversation');
   } finally {

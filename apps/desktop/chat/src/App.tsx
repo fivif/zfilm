@@ -14,7 +14,7 @@ import { ProjectConversation, TurnUndoContext, primeStoredTranscript } from '@/c
 import type { ProjectVersion } from '@/components/project-version';
 import { ProjectStarters } from '@/components/ProjectStarters';
 import { AttachmentPreview, type AttachmentPreviewItem } from '@/components/AttachmentPreview';
-import { ModelPopover } from '@/components/ModelPopover';
+import { ModelPopover, setLibraryAgentContext } from '@/components/ModelPopover';
 import { AddSkillDialog, type PickedSkill } from '@/components/AddSkill';
 import { SKILLS_CHANGED } from 'openfilm/studio-ui/lib/project-sources.ts';
 import { CardActions, CardButton, ComposerCard } from '@/components/ComposerCard';
@@ -304,6 +304,10 @@ function ChatPane({ project, banners, selection, assetsOpen, assetsOverlay }: { 
   const usedAgent = [shownSessionItem?.agent, lastTurnAgent].find((id): id is LocalAgentId => Boolean(id) && isAgentId(id));
   const { agent, was: agentWas } = conversationAgent(usedAgent, la.roster, currentAgent(la));
   const agentPrefs = conversationPrefs(la.prefs, shownSessionItem?.agentPrefs);
+  React.useLayoutEffect(() => {
+    setLibraryAgentContext({ agent, prefs: agentPrefs });
+    return () => setLibraryAgentContext(null);
+  }, [agent, agentPrefs]);
   /** the agent or an option changed in the menu: kept on this conversation, once it has said something (a new one
       takes the pick); not a use of it, so it keeps its place in the list */
   const keepOnSession = React.useCallback((patch: (s: ProjectSessionItem) => Partial<ProjectSessionItem>) => {

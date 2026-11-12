@@ -6,11 +6,44 @@
 // cache; the render's pages are served the copy, and the sound is still mixed from the original.
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { extname, join, relative, sep } from 'node:path';
 import { colorTagsOf, encoders, h264ColorTags, hardwareEncoder, hardwareOptions, onTheChip } from './encoders.mjs';
 import { kindOf, readFilmFile, srcHref } from './film-doc.mjs';
 import { ffmpeg, fileOf, hash, kill, outDir } from './shared.mjs';
+
+/** Copies no render has asked for in this long go: a video edited again makes a copy under a new key. */
+const KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+/** Past this the oldest go first: four a second at 19 Mbps is 1.8 GB for a 90-second film (issue #303 §8). */
+const MAX_BYTES = 2 * 1024 ** 3;
+
+/**
+ * Drop the seek copies this project's cache no longer needs: those untouched for `KEEP_MS`, then the oldest until the
+ * folder is under `MAX_BYTES`. Called before a render makes its own, so a copy it needs is made again rather than
+ * missed; never fails a render, whatever the disk says.
+ * @param {string} root the film's folder
+ */
+export function sweepSeekCache(root) {
+  const dir = outDir(root, 'seek');
+  /** @type {string[]} */
+  let names;
+  try { names = readdirSync(dir); } catch { return; }
+  const kept = [];
+  for (const name of names) {
+    const file = join(dir, name);
+    let stats;
+    try { stats = statSync(file); } catch { continue; }
+    if (!stats.isFile()) continue;
+    if (Date.now() - stats.mtimeMs > KEEP_MS) { try { rmSync(file, { force: true }); } catch { /* kept */ } continue; }
+    kept.push({ file, size: stats.size, at: stats.mtimeMs });
+  }
+  let total = kept.reduce((n, copy) => n + copy.size, 0);
+  if (total <= MAX_BYTES) return;
+  for (const copy of kept.sort((a, b) => a.at - b.at)) {
+    if (total <= MAX_BYTES) break;
+    try { rmSync(copy.file, { force: true }); total -= copy.size; } catch { /* kept */ }
+  }
+}
 
 /** A key frame further apart than this is slow to seek to frame by frame. */
 const SLOW_GOP_S = 0.5;
@@ -218,6 +251,8 @@ export async function browserCopies(browser, origin, root, files, { signal, slow
 export async function seekableCopies(files, root, { signal, plays, slow = true, fine = false, failed } = {}) {
   const copies = new Map();
   outDir(root, 'seek');
+  /* stale copies go before this render's are made: a copy is kept for a week and the folder under 2 GB */
+  sweepSeekCache(root);
   /* two at a time: on the processor each one keeps several cores busy; on the graphics chip it leaves them free */
   const queue = [...new Set(files)];
   const worker = async () => {

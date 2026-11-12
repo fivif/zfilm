@@ -216,7 +216,7 @@ export function framing(stage, frame, fill, out, alpha) {
 
 const safeName = (/** @type {string} */ text) => {
   /* no dot or space at the end (Windows drops them, and the file is not found under the name it was made with) */
-  const name = text.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).replace(/[. ]+$/, '') || 'OpenFilm';
+  const name = text.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).replace(/[. ]+$/, '') || 'Zfilm';
   /* names Windows keeps for devices, whatever follows their first dot */
   return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(name) ? name.replace(/^[^.]*/, (m) => `${m} film`) : name;
 };

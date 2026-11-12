@@ -71,8 +71,8 @@ test('FCPXML keeps exact NTSC times, source trims, layering, transforms and sepa
 
 test('only real empty intervals become primary gaps, with overlays anchored in source time', () => {
   const xml = fcpxmlDocument(timeline);
-  assert.match(xml, /<spine>\s*<gap name="OpenFilm" offset="0\/30000s" start="0s" duration="15015\/30000s">/);
-  assert.match(xml, /<gap name="OpenFilm" offset="60060\/30000s" start="0s" duration="30030\/30000s">/);
+  assert.match(xml, /<spine>\s*<gap name="Zfilm" offset="0\/30000s" start="0s" duration="15015\/30000s">/);
+  assert.match(xml, /<gap name="Zfilm" offset="60060\/30000s" start="0s" duration="30030\/30000s">/);
   assert.equal((xml.match(/<gap /g) ?? []).length, 2);
   assert.match(xml, /name="footage" lane="0" offset="15015\/30000s" start="30030\/30000s"/);
   assert.match(xml, /name="overlay" lane="1" offset="45045\/30000s" start="0\/30000s"/);
@@ -82,7 +82,7 @@ test('only real empty intervals become primary gaps, with overlays anchored in s
 test('FCPXML also writes integer-rate, audio-only timelines with a full-length primary storyline', () => {
   const xml = fcpxmlDocument({ ...timeline, rate: nleRate(25), video: [], files: [timeline.files[1]], audio: [timeline.audio[1]] });
   assert.match(xml, /frameDuration="1\/25s"/);
-  assert.match(xml, /<gap name="OpenFilm" offset="0\/25s" start="0s" duration="90\/25s">/);
+  assert.match(xml, /<gap name="Zfilm" offset="0\/25s" start="0s" duration="90\/25s">/);
   assert.doesNotMatch(xml, /<video /);
 });
 
@@ -105,7 +105,7 @@ test('FCPXML includes editable subtitle titles above pictures, clipped to the se
   assert.equal((xml.match(/<title /g) ?? []).length, 2);
   assert.match(xml, /<effect id="subtitle-title" name="Basic Title" uid="\.\.\.\/Titles.localized\/Bumper:Opener.localized\/Basic Title.localized\/Basic Title.moti"\/>/);
   assert.match(xml, /<title ref="subtitle-title" name="Hello[^>]*lane="2"/);
-  assert.match(xml, /role="titles.OpenFilm Subtitles"/);
+  assert.match(xml, /role="titles.Zfilm Subtitles"/);
   assert.match(xml, /<text><text-style ref="subtitle-style-1">Ann：Hello &amp; &lt;world&gt;\n第二行<\/text-style><\/text>/);
   assert.match(xml, /<adjust-transform position="0 -40"\/>/);
   assert.deepEqual([...xml.matchAll(/<text-style-def id="([^"]+)"/g)].map((m) => m[1]), ['subtitle-style-1', 'subtitle-style-2']);

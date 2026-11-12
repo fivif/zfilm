@@ -109,7 +109,7 @@ import { Tooltip } from './Tooltip';
 import { ProjectTitle } from './ProjectTitle';
 import { ProjectTabs } from './ProjectTabs';
 import tabStyles from './ProjectTabs.module.css';
-import { AppMenu } from './AppMenu';
+import { SettingsButton } from './SettingsButton';
 import { UpdateButton, WebUpdateButton } from './UpdateButton';
 import { MediaPool, type ImportProgress } from './MediaPool';
 import { LayersPanel } from './LayersPanel';
@@ -1740,7 +1740,7 @@ export function ProjectView({ projectId, onProject, onLeave }: {
       dismissLibraryPreview.current();
       const before = new Set(blocksRef.current.flatMap((b) => (b.clipId ? [b.clipId] : [])));
       const picked = (failed: string | null) => { if (!failed) pickNewClip(before); return failed; };
-      /* a transition of OpenFilm's library (lib/library): its middle on the cut it was put near, never pushing or
+      /* a transition of Zfilm's library (lib/library): its middle on the cut it was put near, never pushing or
          cutting what is under it */
       if (builtInItem(file.saved)?.place === 'cut') {
         const at = onCut(plan.at, durMs, cutsOf(timelineTracks));
@@ -1825,7 +1825,7 @@ export function ProjectView({ projectId, onProject, onLeave }: {
     else if (pickedMedia) void addMedia(pickedMedia, { mode, range, atPlayhead: true, follow: true });
   }, [addMedia, placeSaved, pickedMedia, pickedSaved]);
   /*
-   * OpenFilm's library in the assets drawer (components/library/LibraryDrawer, lib/library). A click tries a thing in
+   * Zfilm's library in the assets drawer (components/library/LibraryDrawer, lib/library). A click tries a thing in
    * the viewer, nothing written (components/library/LibraryTrial; a look through the stage's look preview, on the clip
    * it would go on). Enter or "+" puts it in: a page or a sound taken into the project and put at the
    * playhead (a sound as a file of the project goes, a page on a new track at the top, a transition's middle on the
@@ -4552,9 +4552,9 @@ export function ProjectView({ projectId, onProject, onLeave }: {
                 {projectTitle}
               </div>
             </div> : null}
-            {/* the window's controls over this, then the app menu */}
+            {/* the window's controls over this, then Settings at the corner */}
             <div aria-hidden className={studioHost?.tabs ? tabStyles.windowSpace : 'shrink-0 self-stretch'} style={{ width: 'var(--titlebar-logo-x)' }} />
-            <div className={studioHost?.tabs ? tabStyles.system : 'pointer-events-auto relative flex min-w-0 items-center'}><AppMenu onSettings={setSettingsOpen} /></div>
+            <div className={studioHost?.tabs ? tabStyles.system : 'pointer-events-auto relative flex min-w-0 items-center'}><SettingsButton onSettings={() => setSettingsOpen('general')} /></div>
             {studioHost?.tabs ? <ProjectTabs current={projectTitle} onProjects={() => setProjectsOpen(true)} onRenameCurrent={startRename} onCoverCurrent={coverFromFrame} /> : null}
             <div className="pointer-events-auto relative flex min-w-0 items-center gap-1">
               <UpdateButton />

@@ -26,7 +26,7 @@ openfilm open   [folder | url]    # show a film in Studio (a GitHub address fetc
 openfilm look   [what] [t | a-b]  # check the film, a page or a media file
 openfilm render [a-b]             # the MP4; --4k, --blur, --alpha
 openfilm get    [what]            # voice-over, music, sound effects, transcripts, images, video, from your services
-openfilm doctor                   # what this computer has for OpenFilm, to paste into an issue
+openfilm doctor                   # what this computer has for Zfilm, to paste into an issue
 ```
 
 `MANUAL.md` (in this package) is what `openfilm` tells your agent, and `SPEC.md` is the film format, for anyone
@@ -35,4 +35,4 @@ building a player, renderer or editor. Settings, how it works and the source:
 
 ## License
 
-[MIT](LICENSE). The OpenFilm name and logo are trademarks: see [TRADEMARK.md](TRADEMARK.md).
+[MIT](LICENSE). The Zfilm name and logo are trademarks: see [TRADEMARK.md](TRADEMARK.md).

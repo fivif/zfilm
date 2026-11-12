@@ -65,6 +65,9 @@ const stop = async () => {
 /* the port is taken (by something else: the CLI asks run.json for a running Studio first) or reserved (Windows keeps
    ranges for Hyper-V and WSL, and refuses them with EACCES): any free one does, the CLI finds it through run.json */
 const taken = (/** @type {unknown} */ e) => ['EADDRINUSE', 'EACCES'].includes(/** @type {NodeJS.ErrnoException} */ (e).code ?? '');
+/* a Studio that only changed its name opens on the films of the one before it, once (locations.mjs) */
+try { const { adoptPreviousLibrary } = await import('../../src/locations.mjs'); adoptPreviousLibrary(); } catch { /* as it was */ }
+
 try {
   studio = await startStudio({ port, advertise: true, onQuit: stop }).catch((e) => {
     if (!port || !taken(e)) throw e;
@@ -80,7 +83,7 @@ try {
   console.error(e);
   process.exit(1);
 }
-console.log(`OpenFilm Studio · ${studio.origin}`);
+console.log(`Zfilm Studio · ${studio.origin}`);
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 

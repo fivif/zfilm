@@ -4,7 +4,6 @@
 const definitions = {
   codex: { name: 'Codex', install: 'https://chatgpt.com/download/' },
   claude: { name: 'Claude Code', install: 'https://claude.com/download' },
-  openfilm: { name: 'OpenFilm', install: null },
   copilot: { name: 'GitHub Copilot', install: 'https://github.com/features/copilot/cli' },
   cursor: { name: 'Cursor', install: 'https://cursor.com/cli' },
   opencode: { name: 'OpenCode', install: 'https://opencode.ai/download' },
@@ -22,7 +21,7 @@ export const AGENT_DEFINITIONS = Object.freeze(definitions);
 /** @typedef {keyof typeof AGENT_DEFINITIONS} AgentId */
 
 export const AGENT_IDS = Object.freeze(/** @type {AgentId[]} */ (Object.keys(AGENT_DEFINITIONS)));
-export const OWN_AGENT_IDS = Object.freeze(AGENT_IDS.filter((id) => id !== 'byok' && id !== 'openfilm'));
+export const OWN_AGENT_IDS = Object.freeze(AGENT_IDS.filter((id) => id !== 'byok'));
 
 /** All desktop choices, including own key; safe for persisted data and unknown historical ids.
  * @param {unknown} value

@@ -176,6 +176,15 @@ export function createTabs({ saved = null, now = Date.now, newId = randomUUID } 
       const t0 = now();
       return tabs.filter((t) => t.id !== active && t0 - t.shown >= ms && !t.working && t.exporting == null).map((t) => t.id);
     },
+    /**
+     * The pages to let go so that at most `max` tabs behind the one in front keep one: those left longest first. A page
+     * kept is a whole Studio in its own renderer; letting a tab's go means loading it again when it is shown next.
+     * @param {number} max
+     */
+    warmBeyond(max) {
+      const behind = tabs.filter((t) => t.id !== active && !t.working && t.exporting == null).sort((a, b) => a.shown - b.shown);
+      return behind.slice(0, Math.max(0, behind.length - max)).map((t) => t.id);
+    },
     /** As kept for next time. @returns {SavedTabs} */
     saved: () => ({ tabs: tabs.map((t) => ({ projectId: t.projectId, title: t.title })), active: Math.max(0, indexOf(active ?? '')) }),
   };

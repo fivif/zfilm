@@ -23,6 +23,12 @@ interface Native {
   pathForFile(file: File): string;
   revealPath(path: string): Promise<void>;
   pickFolder(options?: { title?: string; button?: string; at?: string }): Promise<string | null>;
+  libraryImport: {
+    create(snapshot: import('openfilm/studio-ui/lib/host.ts').HostWritingModel): Promise<import('openfilm/studio-ui/library-import/types.ts').LibraryImportJob | null>;
+    listJobs: NonNullable<StudioHost['libraryImport']>['listJobs'];
+    retryFailed: NonNullable<StudioHost['libraryImport']>['retryFailed'];
+    onChange: NonNullable<StudioHost['libraryImport']>['onChange'];
+  };
   capture(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>;
   agents: NonNullable<StudioHost['agents']>;
   /* the window's tabs (src/tabs.mjs) */
@@ -47,6 +53,11 @@ interface Native {
 }
 
 const native = (window as unknown as { openfilmNative: Native }).openfilmNative;
+const importedFiles = new Map<string, number>();
+native.libraryImport.onChange(job => {
+  const count = job.items.filter(item => (item as typeof item & { copied?: boolean }).copied).length;
+  if (count !== importedFiles.get(job.id)) { importedFiles.set(job.id, count); window.dispatchEvent(new Event('zfilm-library-import-change')); }
+});
 const hello = native.hello();
 
 /** A value that tells its listeners when it changes. */
@@ -288,7 +299,7 @@ const INSET_RIGHT = 138;
 
 export const host: StudioHost = {
   version: 1,
-  name: 'OpenFilm',
+  name: 'Zfilm',
   projectChanged,
   ...(mac ? { titlebar: { get inset() { return fullScreen.get() ? 0 : INSET; }, onChange: (listener: Listener<number>) => { fullScreen.on((full) => listener(full ? 0 : INSET)); } } } : {}),
   ...(windows ? { titlebar: { get inset() { return fullScreen.get() ? 0 : 6; }, insetRight: INSET_RIGHT, onChange: (listener: Listener<number>) => { fullScreen.on(full => listener(full ? 0 : 6)); } } } : {}),
@@ -331,6 +342,16 @@ export const host: StudioHost = {
   notifications,
   update,
   folders: { pick: native.pickFolder, pathOf: native.pathForFile },
+  libraryImport: {
+    pickAndImport: async () => {
+      const snapshot = host.libraryImport?.selection?.();
+      if (!snapshot) throw new Error(document.documentElement.lang.startsWith('zh') ? '请先连接当前 Agent，再导入文件夹。' : 'Connect the current agent before importing a folder.');
+      return native.libraryImport.create(snapshot);
+    },
+    listJobs: () => native.libraryImport.listJobs(),
+    retryFailed: id => native.libraryImport.retryFailed(id),
+    onChange: listener => native.libraryImport.onChange(listener),
+  },
   tabs: native.tabs,
   useSkill: (skill) => skillPicked.set(skill),
   skills: { add: () => skillAdd.set(undefined) },

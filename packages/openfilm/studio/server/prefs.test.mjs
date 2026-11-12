@@ -14,7 +14,7 @@ test('the version whose notes were last shown: a version, else none', () => {
   assert.deepEqual(prefsOf({ seenVersion: '0.1.6' }).proxies, { on: true, height: 720 }, 'the rest as before');
 });
 
-test('what a newer OpenFilm keeps in prefs.json stays when this one writes it', () => {
+test('what a newer Zfilm keeps in prefs.json stays when this one writes it', () => {
   const home = mkdtempSync(join(tmpdir(), 'of-prefs-'));
   const was = process.env.OPENFILM_HOME;
   process.env.OPENFILM_HOME = home;

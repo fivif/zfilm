@@ -8,7 +8,7 @@ import { builtInRoot, libraryIndex } from '../studio/server/library.mjs';
 import { LIBRARY_VERBS, findInLibrary, languageOf, libraryGet, libraryVerbs, searchFile, searchLibrary } from './library-search.mjs';
 import { embedder, manifest } from './library-semantic.mjs';
 
-/* OpenFilm's service searching the library by meaning, as `POST /v1/library/search` does (the model and the things'
+/* Zfilm's service searching the library by meaning, as `POST /v1/library/search` does (the model and the things'
    vectors): here, when this checkout's library has the model (published with the library, not in git); else no
    service, and words alone */
 /* the Services settings of the tests' own (Library search on, as it is by default) */
@@ -91,14 +91,14 @@ test('nothing that fits is nothing found, and said so', async () => {
   const said = await libraryGet('music-search', { prompt: 'qwzxv' });
   assert.equal(said.code, 0);
   /* a vector is near something whatever is asked: then the nearest are given as such */
-  if (semantic) assert.match(said.lines[0], /^No words of “qwzxv” are in OpenFilm's library; the 8 nearest in meaning, which may not fit:$/);
+  if (semantic) assert.match(said.lines[0], /^No words of “qwzxv” are in Zfilm's library; the 8 nearest in meaning, which may not fit:$/);
   else {
-    assert.match(said.lines[0], /^Nothing in OpenFilm's library for “qwzxv”: make one with `openfilm get music`\.$/);
+    assert.match(said.lines[0], /^Nothing in Zfilm's library for “qwzxv”: make one with `openfilm get music`\.$/);
     assert.match((await libraryGet('transition', { prompt: 'qwzxv' })).lines[0], /write it yourself/);
   }
 });
 
-test('with OpenFilm\'s service, what is meant is found with no word in common, and what is named stays first', { skip: !semantic && 'the model is not in this library' }, async () => {
+test('with Zfilm\'s service, what is meant is found with no word in common, and what is named stays first', { skip: !semantic && 'the model is not in this library' }, async () => {
   const goodbye = (await searchLibrary('music', 'sad goodbye at a train station', { limit: 5 })).found;
   assert.ok(goodbye.filter(({ item }) => /farewell|grief|goodbye|lament|elegiac/i.test(`${item.name.en} ${item.about ?? ''}`)).length >= 3, goodbye.map((f) => f.item.name.en).join());
   assert.ok(!goodbye.some(({ item }) => /training|gym/i.test(item.name.en)), 'no word taken for what it is not');
@@ -129,7 +129,7 @@ test('a search prints each match\'s id to take, what it is like and where to see
   const { code, lines } = await libraryGet('transition', { prompt: 'glitch', limit: '3' });
   const text = lines.join('\n');
   assert.equal(code, 0);
-  assert.match(text, /^3 in OpenFilm's library for “glitch”, the best first/);
+  assert.match(text, /^3 in Zfilm's library for “glitch”, the best first/);
   assert.match(text, /^ {4}openfilm\/transitions\/glitch$/m);
   assert.match(text, /over a cut/);
   assert.match(text, /see it: .*transitions[\\/]glitch[\\/]preview\.mp4/);

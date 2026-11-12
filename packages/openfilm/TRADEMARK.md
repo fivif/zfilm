@@ -1,4 +1,4 @@
-# OpenFilm trademarks
+# Zfilm trademarks
 
 The code in this repository is licensed under [MIT](LICENSE): use it, change it, ship it. The license covers the code,
 not the OpenFilm name and logo. This page says how you can use them, so that people always
