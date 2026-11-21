@@ -1,6 +1,6 @@
 {
   "name": "@openfilm/desktop",
-  "version": "0.3.6",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "productName": "Zfilm",
@@ -20,6 +20,7 @@
     "@agentclientprotocol/sdk": "1.5.0",
     "@earendil-works/pi-codemode": "1.1.0",
     "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-mcp": "1.1.0",
     "diff": "9.0.0",
     "openfilm": "workspace:*",
     "undici": "8.12.2"

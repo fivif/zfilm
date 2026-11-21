@@ -50,7 +50,8 @@ function isEndless(file: { path: string; kind: string; endless?: boolean }): boo
 }
 
 /** The length a dropped clip is drawn and written with. */
-export function dropDurMsOf(file: { path: string; kind: string; durationMs?: number; endless?: boolean }): number {
+export function dropDurMsOf(file: { path: string; kind: string; durationMs?: number; endless?: boolean; range?: ResourceDragItem['range'] }): number {
+  if (file.range && file.range.outMs > file.range.inMs && !isEndless(file)) return file.range.outMs - file.range.inMs;
   if (file.durationMs && file.durationMs > 0) return Math.max(MIN_BLOCK_MS, file.durationMs);
   /* for a still this is the `time` written, so preview, placeholder and film.html share it — or the clip would change
      length once written */
@@ -97,7 +98,7 @@ export function assetPageFit(
  * canvas gets a box in its own shape (assetFitBox), a page without a size of its own its size and box (assetPageFit).
  */
 export function assetClipElement(
-  file: Pick<ResourceDragItem, 'path' | 'kind' | 'endless' | 'reflows'> & { w?: number | undefined; h?: number | undefined },
+  file: Pick<ResourceDragItem, 'path' | 'kind' | 'endless' | 'reflows' | 'range'> & { w?: number | undefined; h?: number | undefined },
   stage?: StageSize | null,
 ): Record<string, unknown> | null {
   const kind = assetClipKindOf(file);
@@ -108,6 +109,7 @@ export function assetClipElement(
   return {
     src,
     ...(isEndless(file) ? { time: [0, STILL_DROP_MS / 1000] } : {}),
+    ...(file.range && file.range.outMs > file.range.inMs && !isEndless(file) ? { time: [file.range.inMs / 1000, file.range.outMs / 1000] } : {}),
     ...(box ? { box } : {}),
     ...(page ? { box: page.box, size: page.size } : {}),
   };
@@ -150,7 +152,7 @@ function occupiedOf(
 }
 
 /** A new track at film.html index `docAt`: which row its insert line is drawn on top of. */
-function newTrackSpot(tracks: readonly TimelineTrack[], docAt: number): AssetDropSpot {
+export function newTrackSpot(tracks: readonly TimelineTrack[], docAt: number): AssetDropSpot {
   const i = tracks.findIndex((tr) => tr.docIndex != null && tr.docIndex >= docAt);
   return { action: 'new-track', laneIndex: i >= 0 ? i : tracks.length, docAt };
 }
@@ -169,9 +171,8 @@ const overlayOnly = (track: TimelineTrack) => Boolean(track.overlay || track.tex
 
 /**
  * A sound goes on a sound track (A), a picture (a page, a video, a still) on a picture track (V), as the timeline names
- * them: let go over a track of the other kind, or above or below every row, onto the nearest track of its own kind
- * free there (a text only on a row of text), else a new one where its kind's tracks are: a sound track under the
- * last one, a picture track right above V1 (which stays the main track).
+ * them. When a drop has no explicit position for a track of its kind, use a free one nearby (a text only on a
+ * row of text), or open one beside the other tracks of its kind.
  */
 function ownKindSpot(
   tracks: readonly TimelineTrack[],
@@ -196,7 +197,7 @@ function ownKindSpot(
 }
 
 export function assetDropSpot(
-  file: Pick<ResourceDragItem, 'path' | 'kind' | 'durationMs' | 'saved'>,
+  file: Pick<ResourceDragItem, 'path' | 'kind' | 'range' | 'durationMs' | 'saved'>,
   tracks: readonly TimelineTrack[],
   hit: AssetLaneHit | null,
   atMs: number,
@@ -210,9 +211,12 @@ export function assetDropSpot(
   const onFilm = tracks.filter((tr) => tr.docIndex != null);
   const sound = assetClipKindOf(file) === 'audio';
 
-  /* pointing at a row: it goes onto the row under the pointer, when it is a track of its kind (ownKindSpot) */
+  /* pointing at a row: a sound over a picture opens its own track beside that picture */
   if (hit && hit.lane >= 0 && hit.lane < tracks.length) {
     const target = tracks[hit.lane]!;
+    if (sound && target.docIndex != null && target.role !== 'audio') {
+      return newTrackSpot(tracks, target.docIndex + (hit.band === 'below' ? 1 : 0));
+    }
     if (target.docIndex != null && !target.captions && (target.role === 'audio') !== sound) {
       return ownKindSpot(tracks, sound, libraryText(file), range, hit.lane, libraryOverlay(file));
     }
@@ -239,10 +243,9 @@ export function assetDropSpot(
     return { action: 'into', laneIndex: hit.lane, lane: target.lane, docIndex: null, locked: false };
   }
 
-  /* above or below every row: a new track at the top / bottom, like dragging a clip there (moveDestFor); a sound where
-     the sound tracks are */
-  if (sound && onFilm.length) return ownKindSpot(tracks, true, false, range, hit && hit.lane < 0 ? 0 : tracks.length);
+  /* An explicit drop above or below every row opens a track there. A sound placed without that choice uses its kind. */
   if (hit && hit.lane < 0 && onFilm.length) return newTrackSpot(tracks, onFilm[0]!.docIndex!);
+  if (sound && onFilm.length && (!hit || hit.band === 'body')) return ownKindSpot(tracks, true, false, range, tracks.length);
   const docEnd = onFilm.reduce((m, tr) => Math.max(m, tr.docIndex! + 1), 0);
   return { action: 'new-track', laneIndex: tracks.length, docAt: docEnd };
 }
@@ -273,7 +276,7 @@ export type AssetDropPlan =
  * answer, no track is named and the insert finds one of the kind.
  */
 export function assetDropInsert(
-  file: Pick<ResourceDragItem, 'path' | 'kind' | 'endless' | 'reflows' | 'w' | 'h'>,
+  file: Pick<ResourceDragItem, 'path' | 'kind' | 'range' | 'endless' | 'reflows' | 'w' | 'h'>,
   tracks: readonly TimelineTrack[],
   target: AssetDropTarget,
   atMs: number,
@@ -303,18 +306,19 @@ export type AssetRunInsert = { element: Record<string, unknown>; at: number; dur
  * document) are left out; none left is `not-clip`.
  */
 export function assetRunInsert(
-  files: readonly Pick<ResourceDragItem, 'path' | 'kind' | 'durationMs' | 'endless' | 'reflows' | 'w' | 'h'>[],
+  files: readonly Pick<ResourceDragItem, 'path' | 'kind' | 'range' | 'durationMs' | 'endless' | 'reflows' | 'w' | 'h'>[],
   tracks: readonly TimelineTrack[],
   hit: AssetLaneHit | null,
   atMs: number,
   edit?: EditMode,
   stage?: StageSize | null,
+  target?: AssetDropTarget,
 ): { inserts: AssetRunInsert[] } | { error: 'not-clip' | 'locked' } {
   const usable = files.filter((f) => assetClipElement(f));
   if (!usable.length) return { error: 'not-clip' };
   const lengths = usable.map(dropDurMsOf);
   const whole = { path: usable[0]!.path, kind: usable[0]!.kind, durationMs: lengths.reduce((a, b) => a + b, 0) + lengths.length * frameMs(1) };
-  const first = assetDropInsert(usable[0]!, tracks, assetDropTargetOf(assetDropSpot(whole, tracks, hit, atMs, edit)), atMs, stage);
+  const first = assetDropInsert(usable[0]!, tracks, target ?? assetDropTargetOf(assetDropSpot(whole, tracks, hit, atMs, edit)), atMs, stage);
   if ('error' in first) return first;
   /* after the first: the track it went onto (a new one is at the index it was opened at) */
   const then = typeof first.track === 'object' ? first.track.insert : first.track;
@@ -341,7 +345,7 @@ export function soundLaneHit(tracks: readonly TimelineTrack[], atMs: number, dur
 }
 
 /** The length a run of dropped files is drawn and written with, end to end. */
-export function assetRunMs(files: readonly Pick<ResourceDragItem, 'path' | 'kind' | 'durationMs' | 'endless'>[]): number {
+export function assetRunMs(files: readonly Pick<ResourceDragItem, 'path' | 'kind' | 'range' | 'durationMs' | 'endless'>[]): number {
   return files.reduce((sum, f) => sum + (assetClipElement(f) ? dropDurMsOf(f) : 0), 0);
 }
 
@@ -369,13 +373,13 @@ export type AssetDropPreview = {
 };
 
 export function assetDropPreview(
-  file: Pick<ResourceDragItem, 'path' | 'kind' | 'name' | 'durationMs' | 'saved' | 'words'>,
+  file: Pick<ResourceDragItem, 'path' | 'kind' | 'name' | 'range' | 'durationMs' | 'saved' | 'words'>,
   tracks: readonly TimelineTrack[],
   hit: AssetLaneHit | null,
   atMs: number,
   edit?: EditMode,
+  spot = assetDropSpot(file, tracks, hit, atMs, edit),
 ): AssetDropPreview | null {
-  const spot = assetDropSpot(file, tracks, hit, atMs, edit);
   const kind = assetClipKindOf(file);
   const blockKind = assetBlockKindOf(file);
   if (!spot || !kind || !blockKind) return null;
@@ -421,11 +425,13 @@ export interface PendingDrop {
   lane: string | null;
   /** A new track: its film.html index. */
   insertTrackAt: number | null;
+  generation?: 'running' | 'failed';
+  trackClips?: readonly string[];
 }
 
 /** How the clip is drawn from the moment it is dropped. */
 export function pendingDropOf(
-  file: Pick<ResourceDragItem, 'path' | 'kind' | 'name' | 'durationMs'>,
+  file: Pick<ResourceDragItem, 'path' | 'kind' | 'name' | 'range' | 'durationMs'>,
   target: AssetDropTarget,
   atMs: number,
 ): PendingDrop | null {
@@ -473,10 +479,13 @@ export function withPendingBlocks(
       endMs: drop.endMs,
       kind: drop.blockKind,
       src: drop.src,
+      ...(drop.generation ? { generation: drop.generation } : {}),
       /* see-through: not written yet. No `loc`: it cannot be selected or dragged, there is nowhere to write an edit */
       off: true,
     };
-    const into = drop.lane != null ? out.findIndex((tr) => tr.lane === drop.lane) : -1;
+    const into = drop.trackClips?.length
+      ? out.findIndex((tr) => tr.blocks.some((b) => b.clipId && drop.trackClips?.includes(b.clipId)))
+      : drop.lane != null ? out.findIndex((tr) => tr.lane === drop.lane) : -1;
     if (into >= 0) {
       const row = out[into]!;
       row.blocks = [...row.blocks, block].sort((a, b) => a.startMs - b.startMs);

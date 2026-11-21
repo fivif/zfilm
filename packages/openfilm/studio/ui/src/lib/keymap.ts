@@ -30,11 +30,13 @@ export const ACTIONS = [
   { id: 'nudge-back', tab: 'timeline', keys: ['alt+ArrowLeft'] },
   { id: 'nudge-forward', tab: 'timeline', keys: ['alt+ArrowRight'] },
   { id: 'overwrite-track-down', tab: 'timeline', keys: ['alt+ArrowDown'] },
+  { id: 'overwrite-track-up', tab: 'timeline', keys: ['alt+ArrowUp'] },
   { id: 'toggle-magnet', tab: 'timeline', keys: ['p', 'shift+n'] },
   { id: 'toggle-snap', tab: 'timeline', keys: ['n'] },
-  { id: 'toggle-linkage', tab: 'timeline', keys: ['`', 'shift+`'] },
-  { id: 'zoom-in', tab: 'timeline', keys: ['mod++', 'mod+='] },
-  { id: 'zoom-out', tab: 'timeline', keys: ['mod+-'] },
+  { id: 'toggle-linkage', tab: 'timeline', keys: ['shift+`'] },
+  { id: 'toggle-skimming', tab: 'timeline', keys: ['s', 'shift+s'] },
+  { id: 'zoom-in', tab: 'timeline', keys: ['+', '=', 'mod++', 'mod+='] },
+  { id: 'zoom-out', tab: 'timeline', keys: ['-', 'mod+-'] },
   { id: 'zoom-reset', tab: 'timeline', keys: ['mod+0'] },
   { id: 'zoom-fit', tab: 'timeline', keys: ['shift+z'] },
   { id: 'add-marker', tab: 'timeline', keys: ['m'] },
@@ -46,6 +48,8 @@ export const ACTIONS = [
   { id: 'compound', tab: 'timeline', keys: ['alt+g'] },
   { id: 'uncompound', tab: 'timeline', keys: ['alt+shift+g'] },
   /* the player */
+  { id: 'preview-fullscreen', tab: 'player', keys: ['`'] },
+  { id: 'compare-grades', tab: 'player', keys: ['shift+d'] },
   { id: 'play-pause', tab: 'player', keys: ['Space'] },
   { id: 'play-range', tab: 'player', keys: ['shift+Space'] },
   { id: 'loop', tab: 'player', keys: ['shift+l'] },
@@ -81,6 +85,7 @@ export const ACTIONS = [
   { id: 'copy-attrs', tab: 'basic', keys: ['mod+shift+c'] },
   { id: 'paste-attrs', tab: 'basic', keys: ['mod+shift+v'] },
   /* the rest */
+  { id: 'export', tab: 'other', keys: ['mod+m'] },
   { id: 'refer', tab: 'other', keys: ['mod+l'] },
   { id: 'work-mode', tab: 'other', keys: ['mod+e'] },
 ] as const satisfies readonly { id: string; tab: KeyTab; keys: readonly string[] }[];
@@ -162,7 +167,8 @@ const PREMIERE: Partial<Record<ActionId, Binding>> = {
   'nudge-forward': { mac: ['mod+ArrowRight'], other: ['alt+ArrowRight'] },
   /* Snap in Timeline */
   'toggle-snap': ['s'],
-  'zoom-in': ['='],
+  /* Zoom In is the = key, which types + with ⇧ (and the keypad's +) */
+  'zoom-in': ['=', '+'],
   'zoom-out': ['-'],
   /* Zoom to Sequence */
   'zoom-fit': ['\\'],
@@ -229,8 +235,9 @@ const FINAL_CUT: Partial<Record<ActionId, Binding>> = {
   'nudge-forward': ['.'],
   /* Snapping */
   'toggle-snap': ['n'],
-  'zoom-in': ['mod++', 'mod+='],
-  'zoom-out': ['mod+-'],
+  /* ⌘+ / ⌘−; plain + / − as well, as in Studio's other schemes (the app has no other use for them) */
+  'zoom-in': ['mod++', 'mod+=', '+', '='],
+  'zoom-out': ['mod+-', '-'],
   'zoom-fit': ['shift+z'],
   'add-marker': ['m'],
   'next-marker': ["ctrl+'"],
@@ -307,7 +314,8 @@ function keyName(e: Pick<KeyPress, 'key' | 'code' | 'shiftKey' | 'altKey'>): str
   if (e.key === ' ' || e.code === 'Space') return 'Space';
   const letter = letterOf(e);
   if (/^[a-z]$/.test(letter)) return letter;
-  if (e.key === '+') return '+';
+  if (e.key === '+' || e.key === '＋' || e.code === 'NumpadAdd') return '+';
+  if (e.key === '−' || e.key === '－' || e.code === 'NumpadSubtract') return '-';
   /* punctuation the layout types where it is, unshifted: read as typed */
   if (e.key.length === 1 && !e.shiftKey && !e.altKey && PUNCTUATION.has(e.key)) return e.key;
   const byCode = CODE_KEYS[e.code ?? ''];
@@ -321,7 +329,7 @@ function keyName(e: Pick<KeyPress, 'key' | 'code' | 'shiftKey' | 'altKey'>): str
  * shortcut off a Mac). `+` is the same with or without ⇧ (⌘+ is ⌘⇧= on a US keyboard).
  */
 export function comboOf(e: KeyPress, mac: boolean): string | null {
-  if (MODIFIER_KEYS.has(e.key) || e.key === 'Dead' || e.key === 'Unidentified' || !e.key) return null;
+  if (MODIFIER_KEYS.has(e.key) || (e.key === 'Dead' && e.code !== 'Backquote') || e.key === 'Unidentified' || !e.key) return null;
   if (!mac && e.metaKey) return null;
   const key = keyName(e);
   const mods = new Set<Modifier>();
@@ -376,7 +384,11 @@ export interface CustomScheme { base: BuiltInScheme; keys: Partial<Record<Action
 /** A custom scheme's keys. An action added after it was made takes its base's keys, unless one of them is used. */
 export function customKeymap(custom: CustomScheme, mac: boolean): Keymap {
   const base = schemeKeymap(custom.base, mac);
-  return layered((id) => base[id], custom.keys, mac);
+  // Copies of the old defaults assigned both backquote forms to linkage. Free only that legacy pair.
+  const own = { ...custom.keys };
+  const linkage = own['toggle-linkage'];
+  if (!Object.hasOwn(own, 'preview-fullscreen') && linkage?.length === 2 && linkage.includes('`') && linkage.includes('shift+`')) own['toggle-linkage'] = ['shift+`'];
+  return layered((id) => base[id], own, mac);
 }
 
 /* ── finding, showing and changing keys ── */

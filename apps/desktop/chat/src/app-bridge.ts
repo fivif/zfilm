@@ -2,7 +2,7 @@
  * The parts of `window.openfilmDesktop` that are this app's own (src/preload-chat.cjs); the parts the copied chat code
  * uses (localAgents, pathForFile) are typed in lib/desktop-bridge.ts.
  */
-import type { CommunityItem, StudioRef, StudioSelection } from 'openfilm/studio-ui/lib/host.ts';
+import type { CommunityItem, HostWorkbench, StudioRef, StudioSelection } from 'openfilm/studio-ui/lib/host.ts';
 import type { FileChange } from './lib/file-changes';
 
 /* what Studio and the chat say to each other about the film is Studio's own contract (its lib/host.ts) */
@@ -22,16 +22,25 @@ interface AppBridge {
   /** Studio's language (its <html lang>) */
   onLanguage(listener: (language: string) => void): () => void;
   onProject(listener: (project: Project) => void): () => void;
+  workbench(): HostWorkbench | null;
+  onWorkbench(listener: (state: HostWorkbench | null) => void): () => void;
+  showWorkbench(projectId: string, workbench: string): void;
   onChatOpen(listener: (open: boolean) => void): () => void;
   onStudioBrowser(listener: (state: { state: 'downloading' | 'ready' | 'failed'; message?: string }) => void): () => void;
   onStudioFailed(listener: (message: string) => void): () => void;
   onRefer(listener: (ref: StudioRef) => void): () => void;
+  /** a reference Studio takes out of the message being written again */
+  onUnrefer?(listener: (ref: StudioRef) => void): () => void;
   onFfmpeg(listener: (state: FfmpegState) => void): () => void;
   /** take the person to a reference in Studio */
   showInStudio(ref: StudioRef): void;
+  /** take the person to what a link of the project names (`film.html#<clip>`, `film.html#t=12.5`, a file), in Studio */
+  openInStudio?(link: string): void;
   /** an example's folder on this computer, fetched when needed (a reference to one, as its message is sent) */
   exampleFolder?(id: string): Promise<string>;
   /** the examples over the film (Studio's), to point at one or a part of one, or name a skill */
+  /** a folder of this computer picked in the system's dialog: its path, or null when none was */
+  pickFolder?(options?: { title?: string; button?: string }): Promise<string | null>;
   /** the Community over the film; `open`: on that skill's or example's page */
   showExamples?(open?: CommunityItem): void;
   /** a skill picked in the examples, to be named in the message */
@@ -52,7 +61,6 @@ interface AppBridge {
   /** what the pointer is over in Studio (null: nothing it points at): pills pointing at the same thing light up */
   onStudioHover(listener: (ref: StudioRef | null) => void): () => void;
   /** the skills an empty conversation offers (Studio's, with a cover, not turned off), in their order */
-  starterSkills(): Promise<StarterSkill[]>;
   /** the project's files (Studio's listing), for the @ menu */
   projectFiles(): Promise<{ files: Array<{ path: string; kind: string; size: number }>; pages?: Array<{ path: string; size: number }> }>;
   onSelection(listener: (selection: StudioSelection) => void): () => void;
@@ -64,8 +72,9 @@ interface AppBridge {
   onAssetsOverlay?(listener: (open: boolean) => void): () => void;
   setAssetsOpen(open: boolean): void;
   onAssets(listener: (open: boolean) => void): () => void;
-  /** while the assets are open: the composer's height (all the view keeps), and a menu of ours open (it needs the column) */
-  setComposerHeight(px: number): void;
+  /** while the assets are open: the composer's height (all the view keeps), and the height beside the way back to the
+      chat (over the drawer's middle only); and a menu of ours open (it needs the column) */
+  setComposerHeight(px: number, beside?: number): void;
   setMenuOpen(open: boolean): void;
   /** the project's chat record, in its folder: conversations and finished turns (.film/chat), each turn's log (.film/logs) */
   chat: {
@@ -85,7 +94,7 @@ interface AppBridge {
     unsaved?(project: string, except?: string[]): Promise<Array<{ turnId: string; events: TurnLog['events'] }>>;
     /** the project's files as a turn starts, kept by the app; then what the turn changed in them (src/file-changes.mjs).
         `undoable`: the app keeps how the turn found them, which `undo` puts back (while it runs) */
-    snapshot(project: string, turnId: string): Promise<unknown>;
+    snapshot(project: string, turnId: string, recover?: boolean): Promise<unknown>;
     changes(project: string, turnId: string): Promise<{ files: FileChange[]; cut: boolean; undoable?: boolean } | null>;
     undo?(project: string, turnId: string): Promise<{ ok: true; restored: number; missed: string[] } | { ok: false; code: 'gone' }>;
   };
@@ -97,9 +106,9 @@ interface AppBridge {
     list(project: string, agent: string): Promise<SkillListing>;
     /** the skills a message names, as its agent reads each (its folder and its SKILL.md whole) */
     texts(project: string, agent: string, names: string[]): Promise<Array<{ name: string; text: string }>>;
-    /** one of the agent's own skills let into OpenFilm, or not */
+    /** one of the agent's own skills let into Zfilm, or not */
     allow(agent: string, name: string, allowed: boolean): Promise<{ ok: boolean }>;
-    /** OpenFilm's skills changed (one added, or turned on or off): the agents' sessions take them up */
+    /** Zfilm's skills changed (one added, or turned on or off): the agents' sessions take them up */
     changed?(): Promise<unknown>;
     /** a GitHub or GitLab address fetched to be looked at; then kept (`commit`) or let go (`discard`) */
     preview(url: string): Promise<{ ok: true; id: string; skills: SkillPreview[] } | { ok: false; error: string }>;
@@ -116,7 +125,7 @@ interface AppBridge {
 
 export interface DeveloperPrefs { logs: boolean; changes: boolean }
 
-/** One of OpenFilm's skills: the project's, the person's own, or official (openfilm/src/skills.mjs). */
+/** One of Zfilm's skills: the project's, the person's own, or official (openfilm/src/skills.mjs). */
 export interface SkillInfo {
   name: string;
   description: string;
@@ -131,12 +140,11 @@ export interface SkillInfo {
 }
 
 /** A skill offered as a card: its cover's address, and its title by language (none: its name). */
-export interface StarterSkill { name: string; description: string; cover: string; title: Record<string, string> | null }
 
 /** A skill fetched from an address, before it is kept: `replaces`, one of the person's has its name. */
 export interface SkillPreview { name: string; description: string; scripts: string[]; size: number; replaces: boolean }
 
-/** A skill the person installed in their agent themselves, let into OpenFilm or not. */
+/** A skill the person installed in their agent themselves, let into Zfilm or not. */
 export interface OwnSkill { name: string; description: string; folder: string; allowed: boolean }
 
 export interface SkillListing {

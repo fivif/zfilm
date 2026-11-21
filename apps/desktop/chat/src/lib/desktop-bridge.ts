@@ -1,5 +1,5 @@
 /**
- * The desktop shell's bridge. In the OpenFilm app (Electron) the window's page puts it on
+ * The desktop shell's bridge. In the Zfilm app (Electron) the window's page puts it on
  * `window.openfilmDesktop`; in a plain browser there is no such object.
  *
  * It holds only what a web page cannot do by itself, such as a system folder picker or showing a path
@@ -8,12 +8,13 @@
  * The shape matches apps/desktop/shell/bridge.ts; change one, change the other.
  */
 import type { Balance } from './balance';
+import type { HostAgentCatalog } from 'openfilm/studio-ui/lib/host.ts';
 
 /** The coding agents the shell can connect to its MCP endpoint. */
 export type DesktopAgentId = 'claude' | 'codex' | 'cursor' | 'copilot' | 'opencode' | 'codebuddy' | 'devin';
 
 /** The chat's agents: the person's own (Codex, Claude Code, Qwen Code, …), and the app's own on their own key. */
-export type LocalAgentId = 'claude' | 'codex' | 'copilot' | 'cursor' | 'opencode' | 'codebuddy' | 'qwen' | 'kimi' | 'minimax' | 'deepseek' | 'antigravity' | 'byok';
+export type LocalAgentId = 'openfilm' | 'claude' | 'codex' | 'copilot' | 'cursor' | 'opencode' | 'codebuddy' | 'qwen' | 'kimi' | 'minimax' | 'deepseek' | 'antigravity' | 'byok';
 
 /** One agent as the app's roster has it (apps/desktop/src/agent-roster.mjs; Studio's lib/host.ts HostAgent). */
 export interface RosterAgent {
@@ -24,6 +25,10 @@ export interface RosterAgent {
   install?: string | null;
   setupRequired?: string | null;
   configurationRevision?: number;
+  /** The detected native executable; bundled app updates may change it without a settings change. */
+  path?: string | null;
+  catalog?: HostAgentCatalog;
+  openfilm?: { order: string[]; hidden: string[]; defaultOrder: string[]; model?: string; models: Array<{ id: string; name: string; shown: boolean; available: boolean; levels?: string[]; effort?: string }> };
   error?: string;
   /** Whose sign-in it uses, when the agent tells (no key or token). */
   account?: { method: string; email?: string; org?: string; plan?: string };
@@ -62,6 +67,19 @@ export interface LocalAgentSessionInfo {
   configOptions: Array<{ id: string; name: string; description?: string; category?: string; type?: string; currentValue?: unknown; options?: Array<{ value: unknown; name: string; description?: string; disabled?: boolean }> }> | null;
 }
 
+export interface ModelConnectionFailure {
+  host: string;
+  phase: 'connecting' | 'waiting' | 'streaming' | 'unknown';
+  status?: number;
+  requestId?: string;
+  code?: string;
+  elapsedMs?: number;
+  retries: number;
+  partial: boolean;
+}
+
+export type LocalAgentFailure = { ok: false; error: string; balance?: Balance; modelConnection?: ModelConnectionFailure };
+
 /** session/update as is (ACP's SessionUpdate); the UI picks what to draw by `sessionUpdate`. */
 export type LocalAgentEvent =
   | { key: string; kind: 'update'; update: { sessionUpdate: string } & Record<string, unknown> }
@@ -69,7 +87,8 @@ export type LocalAgentEvent =
   | { key: string; kind: 'question'; requestId: string; message: string; toolCallId: string | null; questions: LocalAgentQuestion[] }
   | { key: string; kind: 'exit'; code: number | null; stderr: string }
   /* the turn settled — also said on the channel, for a page that was reloaded while it ran */
-  | { key: string; kind: 'done'; turnId: string; ok: boolean; stopReason?: string; error?: string; balance?: Balance };
+  | ({ key: string; kind: 'done'; turnId: string; sessionClosed?: boolean }
+    & ({ ok: true; stopReason?: string } | LocalAgentFailure));
 
 /** A picture given to the agent with a message: base64 bytes and their type (an ACP image block). */
 export interface PromptImage { data: string; mimeType: string }
@@ -85,6 +104,14 @@ export interface LocalAgentTurnMeta {
   prompt: string;
   turnNo: number;
   startedAt: number;
+  /** Continue the same chat turn in the agent's conversation. */
+  recovery?: true;
+  /** A different agent takes over this turn using the saved work and original request. */
+  handoff?: true;
+  /** Prefix kept before reattaching, for rebuilding a resumed stream after a page reload. */
+  recoveryItems?: number;
+  /** The agent/model transition shown at the start of the resumed portion. */
+  resumedWith?: string;
   /** the chat row as it was sent (a Turn) */
   turn: unknown;
 }
@@ -95,7 +122,9 @@ export interface LocalAgentRunningTurn {
   agent: LocalAgentId;
   cwd: string;
   meta: LocalAgentTurnMeta;
-  done: { ok: true; stopReason: string } | { ok: false; error: string; balance?: Balance } | null;
+  info?: LocalAgentSessionInfo;
+  stopping?: boolean;
+  done: { ok: true; stopReason: string } | LocalAgentFailure | null;
   events: Array<Record<string, unknown> & { kind: string }>;
 }
 
@@ -133,7 +162,7 @@ export interface DesktopBridge {
     defaultPath?: string;
     filters?: { name: string; extensions: string[] }[];
   }): Promise<string | null>;
-  /** Where exports go by default: `~/Movies/OpenFilm/Exports` (created by the shell). null when unavailable. */
+  /** Where exports go by default: `~/Movies/Zfilm/Exports` (created by the shell). null when unavailable. */
   exportsRoot?(): Promise<string | null>;
   /** Opens a file or folder with its default app. An empty string on success, else the reason. */
   openPath?(path: string): Promise<string>;
@@ -181,6 +210,7 @@ export interface DesktopBridge {
     list(): Promise<RosterAgent[]>;
     connect(id: LocalAgentId): Promise<{ ok: boolean; error?: string }>;
     onChange(listener: (agents: RosterAgent[]) => void): () => void;
+    refreshModels?(id: LocalAgentId, options?: { model?: string; fresh?: boolean }): Promise<{ ok: boolean }>;
     /** The diagnostic report (the computer, the last week's problems, the agents) on the clipboard. Older shells lack it. */
     copyReport?(): Promise<{ ok: boolean }>;
   };
@@ -190,7 +220,7 @@ export interface DesktopBridge {
   onLanguage?(listener: (language: string) => void): () => void;
   localAgents?: {
     list(): Promise<LocalAgentState[]>;
-    /** Close OpenFilm's open sessions with it (its own login is left alone). Older shells lack it. */
+    /** Close Zfilm's open sessions with it (its own login is left alone). Older shells lack it. */
     disconnect?(agent: LocalAgentId): Promise<{ ok: boolean }>;
     /** Opens Terminal to run its own sign-in command, which opens Anthropic's / OpenAI's sign-in page. */
     signIn(agent: LocalAgentId): Promise<{ ok: true } | { ok: false; error: string }>;
@@ -207,7 +237,7 @@ export interface DesktopBridge {
     /** `images`: pictures sent after the text, to an agent that takes them (the shell asks the session) */
     /** `balance`: the service the app's own agent runs on had no balance left for it */
     /** `model`: the model that answered, for an agent whose session names none (GitHub Copilot's, from its record) */
-    prompt(key: string, text: string, meta?: LocalAgentTurnMeta, images?: PromptImage[]): Promise<{ ok: true; stopReason: string; model?: string } | { ok: false; error: string; balance?: Balance }>;
+    prompt(key: string, text: string, meta?: LocalAgentTurnMeta, images?: PromptImage[]): Promise<{ ok: true; stopReason: string; model?: string; sessionClosed?: boolean } | LocalAgentFailure>;
     /** Turns still held by the shell (a reload mid-turn). Older shells lack it. */
     running?(): Promise<LocalAgentRunningTurn[]>;
     /** The page has put this finished turn back: the shell forgets it. */
@@ -216,7 +246,7 @@ export interface DesktopBridge {
     steer?(key: string, text: string, images?: PromptImage[]): Promise<{ ok: boolean; outcome: string }>;
     /** What the agent does with nobody having written is the turn `turnId` (null: no longer), in its log. */
     adopt?(key: string, turnId: string | null, meta?: LocalAgentTurnMeta): Promise<{ ok: boolean }>;
-    cancel(key: string): Promise<{ ok: true }>;
+    cancel(key: string, turnId?: string): Promise<{ ok: true }>;
     setOption(key: string, configId: string, value: unknown): Promise<{ ok: boolean; error?: string; result?: { configOptions?: LocalAgentSessionInfo['configOptions'] } }>;
     answerPermission(key: string, requestId: string, optionId: string | null): Promise<{ ok: boolean }>;
     /** Answers its question; null = skip. Older shells lack it (and never ask). */
@@ -230,7 +260,7 @@ export interface DesktopBridge {
     setBadge(count: number): void;
     onNavigate(cb: (href: string) => void): () => void;
   };
-  /** OpenFilm Studio only: the page runs in a plain browser */
+  /** Zfilm Studio only: the page runs in a plain browser */
   studio?: boolean;
   /**
    * The agents' status: the MCP endpoint's half (who is connected, who is remembered) plus each agent's

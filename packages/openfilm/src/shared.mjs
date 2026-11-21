@@ -1,10 +1,12 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { FilmPage, FrameError, launch, serve } from './host.mjs';
 import { FILM_FILE, readFilmFile } from './film-doc.mjs';
 import { readableLink, referenceSource } from './media-links.mjs';
+import { Bus, RATE, clipChain } from './sound-engine.mjs';
+import { renderSound } from './sound-render.mjs';
 
 /**
  * A film argument (a project folder with film.html, a folder inside one, a folder with index.html, or an .html file)
@@ -49,16 +51,23 @@ function projectOf(dir) {
 /** A command written wrong (a range that ends before it starts, a path that is not there): exit status 2. */
 export class UsageError extends Error {}
 
+/**
+ * `moments`: every time and range given, in their order (look draws several in one sheet); `at` and `range` are the
+ * last of each.
+ * @returns {{ film: string, at: number | null, range: [number, number] | null, moments: Array<number | [number, number]> }}
+ */
 export function parseTarget(args) {
   let film = '.';
   let at = null;
   let range = null;
+  /** @type {Array<number | [number, number]>} */
+  const moments = [];
   for (const arg of args) {
-    if (/^\d+(\.\d+)?$/.test(arg)) at = Number(arg);
-    else if (/^\d+(\.\d+)?-\d+(\.\d+)?$/.test(arg)) { const [a, b] = arg.split('-').map(Number); if (!(b > a)) throw new UsageError(`range ${arg}: the end must be after the start`); range = [a, b]; }
+    if (/^\d+(\.\d+)?$/.test(arg)) { at = Number(arg); moments.push(at); }
+    else if (/^\d+(\.\d+)?-\d+(\.\d+)?$/.test(arg)) { const [a, b] = arg.split('-').map(Number); if (!(b > a)) throw new UsageError(`range ${arg}: the end must be after the start`); range = [a, b]; moments.push(range); }
     else film = arg;
   }
-  return { film, at, range };
+  return { film, at, range, moments };
 }
 
 /**
@@ -68,24 +77,48 @@ export function parseTarget(args) {
  * (a render's, from a BrowserPool), which close() leaves open: only the film's tab is closed.
  */
 export async function open(target, opts = {}) {
-  const loc = locate(target, opts.root);
+  const dir = resolve(target);
+  const base = resolve(opts.root ?? target);
+  const loc = opts.timeline !== undefined && dir === base
+    ? { root: base, entry: FILM_FILE, dir: base, name: basename(base), isFilm: true }
+    : locate(target, opts.root);
+  const timeline = loc.entry === FILM_FILE ? opts.timeline : undefined;
   /* an edit is read before anything opens: its problems, every one, at once */
   if (loc.isFilm) {
-    const { problems } = readFilmFile(readFileSync(join(loc.dir, FILM_FILE), 'utf8'));
+    const { problems } = readFilmFile(timeline ?? readFileSync(join(loc.dir, FILM_FILE), 'utf8'));
     if (problems.length) throw new FrameError(problems.length === 1 ? problems[0] : `${FILM_FILE} has ${problems.length} problems:\n  ${problems.join('\n  ')}`);
   }
   /** @type {Map<string, string>} */
   const copies = new Map();
-  const site = await serve(loc.root, { swap: (file) => opts.swap?.(file) ?? copies.get(file) ?? null, missed: opts.missed });
+  /** @type {Map<string, string>} the graded copies of the film's videos graded by LUTs, by their keys (seekable.mjs) */
+  const graded = new Map();
+  /** @type {{ key: typeof import('./seekable.mjs').gradeKey, range: typeof import('./seekable.mjs').gradeRange } | null} seekable.mjs's names of graded copies, once it is loaded */
+  let keyOf = null;
+  const site = await serve(loc.root, {
+    timeline: opts.timeline,
+    renderRanges: opts.renderRanges,
+    swap: (file, query, source) => opts.swap?.(file, query, source) ?? graded.get(query?.get('of-grade') ?? '') ?? copies.get(file) ?? null,
+    missed: opts.missed,
+    grade: opts.grade ?? ((file, luts, time) => {
+      const range = keyOf?.range(time) ?? null, key = keyOf?.key(file, luts, false, range);
+      return key && graded.has(key) ? { key, from: range?.from ?? 0 } : null;
+    }),
+  });
   const lent = opts.browser ?? null;
   let browser;
   try { browser = lent ?? await launch(opts.launch); }
   catch (e) { await site.close(); throw e; }
   if (opts.playable) {
     try {
-      const { browserCopies, filmVideos } = await import('./seekable.mjs');
-      const files = Array.isArray(opts.playable) ? opts.playable : loc.isFilm ? filmVideos(loc.root, loc.entry) : [];
+      const { browserCopies, filmGrades, filmVideos, gradedCopies, gradeKey, gradeRange } = await import('./seekable.mjs');
+      keyOf = { key: gradeKey, range: gradeRange };
+      const files = Array.isArray(opts.playable) ? opts.playable : loc.isFilm ? filmVideos(loc.root, loc.entry, { timeline, renderRanges: loc.entry === FILM_FILE ? opts.renderRanges : undefined }) : [];
       for (const [file, copy] of await browserCopies(browser, site.url, loc.root, files, { signal: opts.signal })) copies.set(file, copy);
+      /* the film's videos graded by LUTs, as the preview and an export show them (the project's film, for a page drawn
+         around it, as a render's) */
+      const film = loc.isFilm ? loc.entry : opts.root ? FILM_FILE : null;
+      const options = film === FILM_FILE ? { timeline: opts.timeline, renderRanges: opts.renderRanges } : undefined;
+      if (film) for (const [key, copy] of await gradedCopies(filmGrades(loc.root, film, options), loc.root, { signal: opts.signal })) graded.set(key, copy);
     } catch { /* the footage as it is */ }
   }
   /** @type {FilmPage} */
@@ -134,20 +167,26 @@ export function kill(proc) {
   else proc.kill('SIGKILL');
 }
 
-/** Run ffmpeg; `timeoutMs`: stop it and fail with `what` when it has not finished by then. */
-export function ffmpeg(args, { input = false, timeoutMs = 0, what = 'ffmpeg' } = {}) {
+/** Run ffmpeg; `timeoutMs`: stop it and fail with `what` when it has not finished by then. `cwd`: the folder it runs
+    in, which a file named in a filter is read from. */
+export function ffmpeg(args, { input = false, timeoutMs = 0, what = 'ffmpeg', cwd = undefined, signal = undefined } = {}) {
   /* -nostdin: ffmpeg never reads keys from a terminal it was started in (an agent's shell is one) */
-  const proc = spawn('ffmpeg', ['-hide_banner', '-nostdin', '-loglevel', 'error', '-y', ...args], { stdio: [input ? 'pipe' : 'ignore', 'inherit', 'pipe'], windowsHide: true });
+  const proc = spawn('ffmpeg', ['-hide_banner', '-nostdin', '-loglevel', 'error', '-y', ...args], { stdio: [input ? 'pipe' : 'ignore', 'inherit', 'pipe'], windowsHide: true, cwd });
   let err = '';
   proc.stderr.on('data', (d) => { err += d; });
   let late = false;
   const timer = timeoutMs > 0 ? setTimeout(() => { late = true; kill(proc); }, timeoutMs) : null;
   timer?.unref();
+  const cancel = () => kill(proc);
+  signal?.addEventListener('abort', cancel, { once: true });
+  if (signal?.aborted) cancel();
   const done = new Promise((ok, fail) => {
     proc.on('error', (e) => fail(new Error(`ffmpeg: ${e.code === 'ENOENT' ? 'not found on the PATH' : e.message}`)));
     proc.on('close', (code) => {
       if (timer) clearTimeout(timer);
-      if (late) fail(new Error(`${what} did not finish within ${Math.round(timeoutMs / 1000)} s`));
+      signal?.removeEventListener('abort', cancel);
+      if (signal?.aborted) fail(new Error('cancelled'));
+      else if (late) fail(new Error(`${what} did not finish within ${Math.round(timeoutMs / 1000)} s`));
       else if (code === 0) ok();
       else fail(new Error(`ffmpeg: ${err.trim() || `exit ${code}`}`));
     });
@@ -199,6 +238,10 @@ export function checkSound(c) {
  * start by `from`.
  */
 export function audioClips(root, entry, clips, from = 0) {
+  return soundSources(root, entry, clips, from).filter((c) => hasAudio(c.file));
+}
+
+function soundSources(root, entry, clips, from) {
   return (clips ?? []).map((c) => {
     checkSound(c);
     const speed = c.speed ?? 1;
@@ -209,17 +252,19 @@ export function audioClips(root, entry, clips, from = 0) {
     const fade = Array.isArray(c.fade) && c.to != null && (c.fade[0] > 0 || c.fade[1] > 0)
       ? { in: c.fade[0], out: c.fade[1], length: (c.to - (c.from ?? 0)) / speed, skip } : undefined;
     return { file: fileOf(root, entry, c.src), at, from: start, to: c.to, volume: c.volume ?? 1, speed, ...(fade ? { fade } : {}) };
-  }).filter((c) => existsSync(c.file) && hasAudio(c.file) && (c.to == null || c.to > c.from));
+  }).filter((c) => (c.to == null || c.to > c.from) && existsSync(c.file));
 }
 
 /**
  * The sound of [from, …) as mix clips: the film's sound clips and its videos' own sound, as its timeline plays them
  * (a single page has none), mixed as Studio's export mixes it.
  */
-export async function filmSound(s, from) {
+export async function filmSound(s, from, signal) {
   const sounds = s.film.meta.sounds;
   if (!sounds.length) return [];
-  return audioClips(s.root, s.entry, sounds, from);
+  const clips = soundSources(s.root, s.entry, sounds, from);
+  await knowAudioChannels(clips.map((clip) => clip.file), signal);
+  return clips.filter((clip) => hasAudio(clip.file));
 }
 
 const audioStreams = new Map();
@@ -241,6 +286,31 @@ export function audioChannels(file) {
     audioStreams.set(key, channels);
   }
   return audioStreams.get(key);
+}
+
+/**
+ * audioChannels of each of `files` asked beforehand, in parallel without holding the process (a server answering
+ * other requests meanwhile): audioChannels then answers from what is kept.
+ * @param {string[]} files @param {AbortSignal} [signal]
+ */
+export async function knowAudioChannels(files, signal) {
+  const unique = [...new Set(files)];
+  const probe = async (file) => {
+    let version = '';
+    try { const s = statSync(file); version = `${s.mtimeMs}:${s.size}`; } catch { return; }
+    const key = `${file}\0${version}`;
+    if (audioStreams.has(key)) return;
+    const said = await new Promise((done) => execFile('ffprobe',
+      ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=channels', '-of', 'csv=p=0', file],
+      { signal, windowsHide: true }, (error, out) => done(error ? null : out.trim())));
+    /* not read: audioChannels asks again, and says why */
+    if (said != null) audioStreams.set(key, said ? Number.parseInt(said, 10) || 2 : 0);
+  };
+  for (let i = 0; i < unique.length; i += 4) {
+    signal?.throwIfAborted();
+    await Promise.all(unique.slice(i, i + 4).map(probe));
+  }
+  signal?.throwIfAborted();
 }
 
 /** Whether a file has a sound stream (a video clip may be silent). */
@@ -273,9 +343,18 @@ export function fadeFilter(fade) {
   return `aeval='val(ch)*clip(${parts.join('*')},0,1)':c=same`;
 }
 
-/** Mix clips into one track of `duration` seconds. */
-export async function mix(clips, duration, file, codec = ['-c:a', 'aac', '-b:a', '192k']) {
-  const { inputs, filter } = mixGraph(clips.map((c) => ({ ...c, channels: c.channels ?? audioChannels(c.file) })), duration);
+/**
+ * Mix clips into one track of `duration` seconds. `limit`: through the film's bus (src/sound-engine.mjs Bus, its peaks
+ * caught under the delivery ceiling), as a film's sound is delivered and the preview hears it; without it, the sum as
+ * it is (to be measured). ffmpeg mixes; the bus, and a clip's chain (`chain`, sound-engine.mjs clipChain: none has one
+ * today), are the sound engine's, run in Node on the samples (src/sound-render.mjs).
+ */
+export async function mix(clips, duration, file, codec = ['-c:a', 'aac', '-b:a', '192k'], { limit = false, signal = undefined } = {}) {
+  signal?.throwIfAborted();
+  const all = clips.map((c) => ({ ...c, channels: c.channels ?? audioChannels(c.file) }));
+  const chained = all.filter((c) => c.chain?.length);
+  const plain = chained.length ? all.filter((c) => !c.chain?.length) : all;
+  const { inputs, filter } = plain.length ? mixGraph(plain, duration) : { inputs: [], filter: '' };
   /* a mix takes seconds; one that has not ended in minutes never will */
   const timeoutMs = (120 + duration * 2) * 1000;
   /* a long graph goes in a file of its own: a command line has a limit (32,767 characters on Windows), and a film of
@@ -285,10 +364,35 @@ export async function mix(clips, duration, file, codec = ['-c:a', 'aac', '-b:a',
   if (script) writeFileSync(script, filter);
   try {
     const graph = script ? [await filterScriptOption(), script] : ['-filter_complex', filter];
-    await ffmpeg([...inputs, ...graph, '-map', '[out]', '-t', String(duration), ...codec, file], { timeoutMs, what: 'mixing the sound' }).done;
+    const source = [...inputs, ...graph, '-map', '[out]', '-t', String(duration)];
+    if (!limit && !chained.length) { await ffmpeg([...source, ...codec, file], { signal, timeoutMs, what: 'mixing the sound' }).done; return; }
+    await renderSound({ source: plain.length ? source : null, clips: chained.map(chainClip), bus: limit ? new Bus() : null,
+      frames: Math.round(duration * RATE), out: file, codec, signal, timeoutMs, what: 'mixing the sound' });
   } finally {
     if (script) rmSync(script, { force: true });
   }
+}
+
+/**
+ * A clip with a chain, for renderSound: its sound alone decoded by ffmpeg (cut, at its speed, on both sides, at the
+ * mix's rate), its chain run on it, then its volume and fades (fadeFilter's ramps), from where the mix places it (to
+ * the millisecond, as mixGraph's adelay).
+ * @returns {import('./sound-render.mjs').ChainClip}
+ */
+function chainClip(c) {
+  const speed = c.speed && c.speed !== 1 ? `,${tempo(c.speed)}` : '';
+  const mono = c.channels === 1 ? ',pan=stereo|c0=c0|c1=c0' : '';
+  const args = [...(c.from > 0 ? ['-ss', String(c.from)] : []), ...(c.to != null ? ['-t', String(c.to - c.from)] : []), '-vn', '-i', c.file,
+    '-af', `asetpts=PTS-STARTPTS${speed}${mono},aresample=${RATE},aformat=channel_layouts=stereo`];
+  const fade = c.fade;
+  const ramp = (/** @type {number} */ u) => {
+    let g = 1;
+    if (fade.in > 0) g *= Math.min(1, u / fade.in);
+    if (fade.out > 0) g *= Math.min(1, (fade.length - u) / fade.out);
+    return Math.max(0, Math.min(1, g));
+  };
+  return { args, start: Math.round(c.at * 1000) * (RATE / 1000), chain: /** @type {import('./sound-engine.mjs').Processor} */ (clipChain(c.chain)),
+    gain: fade && (fade.in > 0 || fade.out > 0) ? (i) => c.volume * ramp(i / RATE + fade.skip) : () => c.volume };
 }
 
 /** How long a mix's command may be before its graph goes in a file: well under Windows' limit, with room for the rest. */

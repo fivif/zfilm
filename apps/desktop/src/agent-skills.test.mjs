@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { codexServers, mergeConfig, ownMcpServers, ownSkills, sessionSkills, skillStore } from './agent-skills.mjs';
+
+/* a project's own skills reach no agent until the person allows them there (openfilm/skills allowProjectSkill) */
+const { allowProjectSkill, listSkills } = await import(pathToFileURL(createRequire(import.meta.url).resolve('openfilm/skills')).href);
 
 /* which skills are off is read from Studio's prefs.json: a scratch home, never the person's */
 process.env.OPENFILM_HOME = mkdtempSync(join(tmpdir(), 'of-agent-skills-home-'));
@@ -57,10 +62,13 @@ function world() {
   skill(join(home, '.qwen', 'skills', 'qwen-notes'), 'qwen-notes');
   mkdirSync(join(home, '.copilot'), { recursive: true });
   writeFileSync(join(home, '.copilot', 'mcp-config.json'), JSON.stringify({ mcpServers: { ctool: { command: 'ctool' } } }));
-  /* OpenFilm's: the project's and the person's own */
+  /* Zfilm's: the project's and the person's own */
   const openfilmHome = join(home, '.openfilm');
   skill(join(project, 'skills', 'brand'), 'brand');
   skill(join(openfilmHome, 'skills', 'lyric-pv'), 'lyric-pv');
+  /* the project's brand let in by the person, in the Studio home each test reads (the scratch one, or this world's) */
+  const brand = listSkills({ project }).find((s) => s.source === 'project');
+  for (const prefs of [undefined, openfilmHome]) allowProjectSkill(brand, project, true, prefs);
   return { root, home, project, openfilmHome, dataDir: join(root, 'data') };
 }
 
@@ -73,12 +81,12 @@ test("the person's own skills, as each agent keeps them, never its maker's", asy
   assert.deepEqual((await ownSkills('cursor', { cwd: project, home })), [], 'an agent whose skills are not read');
 });
 
-test("Claude Code: OpenFilm's skills as a plugin for each owner (owner:name); the person's own skills and MCP servers off but those let in", async () => {
+test("Claude Code: Zfilm's skills as a plugin for each owner (owner:name); the person's own skills and MCP servers off but those let in", async () => {
   const w = world();
   const s = await sessionSkills('claude', { cwd: w.project, home: w.home, dataDir: w.dataDir, mine: join(w.openfilmHome, 'skills'), allowed: ['research'], mcpAllowed: ['notes'] });
   assert.ok(s.claude.plugins.every((p) => p.type === 'local'));
   const named = Object.fromEntries(s.claude.plugins.map((p) => [JSON.parse(readFileSync(join(p.path, '.claude-plugin', 'plugin.json'), 'utf8')).name, p.path]));
-  assert.deepEqual(Object.keys(named).sort(), ['local', 'openfilm', 'project'], 'one plugin for each owner: OpenFilm, the person, the project');
+  assert.deepEqual(Object.keys(named).sort(), ['local', 'openfilm', 'project'], 'one plugin for each owner: Zfilm, the person, the project');
   assert.equal(realpathSync(join(named.project, 'skills', 'brand')), realpathSync(join(w.project, 'skills', 'brand')), 'project:brand, linked to the skill\'s own folder');
   assert.ok(existsSync(join(named.openfilm, 'skills', 'replicate', 'SKILL.md')), 'openfilm:replicate');
   assert.ok(existsSync(join(dirname(dirname(named.local)), '.agents', 'skills', 'local-lyric-pv', 'SKILL.md')), 'and readable as a skills folder by its full name');
@@ -88,7 +96,7 @@ test("Claude Code: OpenFilm's skills as a plugin for each owner (owner:name); th
   assert.deepEqual(s.log.mcpHidden, ['chatcut', 'local']);
 });
 
-test("Codex: each of the person's own not let in turned off by its file, OpenFilm's as an extra folder", async () => {
+test("Codex: each of the person's own not let in turned off by its file, Zfilm's as an extra folder", async () => {
   const w = world();
   const s = await sessionSkills('codex', { cwd: w.project, home: w.home, dataDir: w.dataDir, mine: join(w.openfilmHome, 'skills'), allowed: ['notes'] });
   assert.deepEqual(s.codexConfig.skills.config.map((c) => [c.path, c.enabled]),
@@ -99,14 +107,14 @@ test("Codex: each of the person's own not let in turned off by its file, OpenFil
   assert.ok(existsSync(join(s.additionalDirectories[0], '.agents', 'skills', 'project-brand', 'SKILL.md')), 'by its full name');
 });
 
-test("OpenCode: every skill denied but its own, OpenFilm's and those let in; Pi: OpenFilm's only; the others unfiltered", async () => {
+test("OpenCode: every skill denied but its own, Zfilm's and those let in; Pi: Zfilm's only; the others unfiltered", async () => {
   const w = world();
   mkdirSync(w.openfilmHome, { recursive: true });
   const oc = await sessionSkills('opencode', { cwd: w.project, home: w.home, dataDir: w.dataDir, mine: join(w.openfilmHome, 'skills'), prefsHome: w.openfilmHome, allowed: ['research'] });
   const config = JSON.parse(oc.env.OPENCODE_CONFIG_CONTENT);
-  /* OpenFilm's own first, in their order (how a film is made, its media, its canvas); then the project's brand and
+  /* Zfilm's own first, a skill after those it builds on (how a film is written, its media, its canvas); then the project's brand and
      lyric-pv and the one installed from Discover */
-  const names = ['openfilm-edit', 'openfilm-media', 'openfilm-canvas', 'project-brand', 'local-lyric-pv', 'openfilm-replicate'];
+  const names = ['openfilm-film', 'openfilm-media', 'openfilm-canvas', 'project-brand', 'local-lyric-pv', 'openfilm-replicate'];
   assert.deepEqual(config.permission.skill, { '*': 'deny', 'customize-opencode': 'allow', ...Object.fromEntries([...names, 'research'].sort().map((n) => [n, 'allow'])) });
   assert.deepEqual(config.mcp, { search: { enabled: false } });
   assert.match(config.skills.paths[0], /agent-skills[\\/].+[\\/]skills$/);
@@ -115,7 +123,7 @@ test("OpenCode: every skill denied but its own, OpenFilm's and those let in; Pi:
   const kimi = await sessionSkills('kimi', { cwd: w.project, home: w.home, dataDir: w.dataDir, mine: join(w.openfilmHome, 'skills'), prefsHome: w.openfilmHome });
   assert.deepEqual(kimi.log, { openfilm: names, allowed: [], mcpAllowed: [], filtered: false, mcpFiltered: false });
   /* by its full name, saying whose it is; the rest of it links (a junction on Windows) to the project's own folder */
-  assert.match(readFileSync(join(pi.piSkills.paths[0], 'project-brand', 'SKILL.md'), 'utf8'), /^---\nname: project-brand\n[\s\S]*> OpenFilm skill `project\/brand`, by this project\./);
+  assert.match(readFileSync(join(pi.piSkills.paths[0], 'project-brand', 'SKILL.md'), 'utf8'), /^---\nname: project-brand\n[\s\S]*> Zfilm skill `project\/brand`, by this project\./);
 });
 
 test('expired session cleanup unlinks skills without removing their real folders', async () => {
@@ -132,14 +140,15 @@ test('expired session cleanup unlinks skills without removing their real folders
   assert.ok(existsSync(join(second.piSkills.paths[0], 'project-brand', 'SKILL.md')), 'the next session has the same skill again');
 });
 
-test("a skill the person turned off, OpenFilm's own too, is given to no session", async () => {
+test("a skill the person turned off, and Zfilm's own whose plugin is off, is given to no session", async () => {
   const w = world();
   mkdirSync(w.openfilmHome, { recursive: true });
-  /* by uid, and by name as kept before uids */
-  writeFileSync(join(w.openfilmHome, 'prefs.json'), JSON.stringify({ skillsOff: ['brand', 'openfilm/canvas'] }));
+  /* by name as kept before uids; one of Zfilm's own has no switch of its own, it goes with its plugin */
+  writeFileSync(join(w.openfilmHome, 'prefs.json'), JSON.stringify({ skillsOff: ['brand', 'openfilm/media'], plugins: { canvas: false } }));
   const pi = await sessionSkills('byok', { cwd: w.project, home: w.home, dataDir: w.dataDir, mine: join(w.openfilmHome, 'skills'), prefsHome: w.openfilmHome });
   assert.ok(!pi.piSkills.names.includes('project-brand'));
-  assert.deepEqual(pi.piSkills.names.slice(0, 2), ['openfilm-edit', 'openfilm-media'], 'one of OpenFilm\'s own, too');
+  /* the media still given: the edit needs it, whatever was kept of a switch it no longer has */
+  assert.deepEqual(pi.piSkills.names.slice(0, 2), ['openfilm-film', 'openfilm-media'], 'Zfilm\'s own while plugins on need them');
   assert.ok(!pi.piSkills.names.includes('openfilm-canvas'));
   assert.ok(pi.piSkills.names.includes('local-lyric-pv'));
   assert.ok(!existsSync(join(pi.piSkills.paths[0], 'project-brand')), 'not in the folder the agent reads');
@@ -158,16 +167,27 @@ test('two skills of a name are both given, each by its full name (owner-name), i
   const pi = await sessionSkills('byok', { cwd: w.project, home: w.home, dataDir: w.dataDir, mine: join(w.openfilmHome, 'skills'), prefsHome: w.openfilmHome });
   assert.ok(pi.piSkills.names.includes('project-brand') && pi.piSkills.names.includes('local-brand'));
   const folder = join(pi.piSkills.paths[0], 'local-brand');
-  assert.match(readFileSync(join(folder, 'SKILL.md'), 'utf8'), /^---\nname: local-brand\ndescription: My brand\n---\n\n> OpenFilm skill `local\/brand`, by you\.\n\n/);
+  assert.match(readFileSync(join(folder, 'SKILL.md'), 'utf8'), /^---\nname: local-brand\ndescription: My brand\n---\n\n> Zfilm skill `local\/brand`, by you\.\n\n/);
   assert.equal(readFileSync(join(folder, 'look.css'), 'utf8'), 'body {}');
   assert.equal(readFileSync(join(folder, 'scripts', 'make.sh'), 'utf8'), 'echo');
   assert.match(readFileSync(join(mine, 'SKILL.md'), 'utf8'), /^---\nname: brand\n/, 'its own file untouched');
   assert.match(readFileSync(join(pi.piSkills.paths[0], 'project-brand', 'SKILL.md'), 'utf8'), /brand skill/, 'the project\'s');
 });
 
-test("OpenFilm's own skill for terminal agents is known, never offered, and always off in the app", async () => {
+test("a skill written for a terminal (`npx openfilm`) reaches an agent in the app with the app's `openfilm`; its own file untouched", async () => {
   const w = world();
-  skill(join(w.home, '.claude', 'skills', 'openfilm'), 'openfilm', 'Make videos as web pages with OpenFilm.');
+  const mine = skill(join(w.openfilmHome, 'skills', 'reel'), 'reel', 'A reel');
+  writeFileSync(join(mine, 'SKILL.md'), '---\nname: reel\ndescription: A reel\n---\n\nRun `npx openfilm look`, then `npx -y openfilm@latest render`.\n');
+  const pi = await sessionSkills('byok', { cwd: w.project, home: w.home, dataDir: w.dataDir, mine: join(w.openfilmHome, 'skills'), prefsHome: w.openfilmHome });
+  const given = readFileSync(join(pi.piSkills.paths[0], 'local-reel', 'SKILL.md'), 'utf8');
+  assert.match(given, /Run `openfilm look`, then `openfilm render`\./);
+  assert.ok(!given.includes('npx'));
+  assert.match(readFileSync(join(mine, 'SKILL.md'), 'utf8'), /npx openfilm look/);
+});
+
+test("Zfilm's own skill for terminal agents is known, never offered, and always off in the app", async () => {
+  const w = world();
+  skill(join(w.home, '.claude', 'skills', 'openfilm'), 'openfilm', 'Make videos as web pages with Zfilm.');
   const own = await ownSkills('claude', { cwd: w.project, home: w.home });
   assert.equal(own.find((s) => s.name === 'openfilm')?.ours, true);
   assert.equal(own.find((s) => s.name === 'research')?.ours, undefined);
@@ -176,7 +196,7 @@ test("OpenFilm's own skill for terminal agents is known, never offered, and alwa
   assert.equal(s.claude.settings.skillOverrides.research, undefined);
 });
 
-test('Qwen Code: a system-defaults file of the app\'s; Copilot: OpenFilm\'s folder and its servers off', async () => {
+test('Qwen Code: a system-defaults file of the app\'s; Copilot: Zfilm\'s folder and its servers off', async () => {
   const w = world();
   const qwen = await sessionSkills('qwen', { cwd: w.project, home: w.home, dataDir: w.dataDir, mine: join(w.openfilmHome, 'skills') });
   const q = JSON.parse(readFileSync(qwen.env.QWEN_CODE_SYSTEM_DEFAULTS_PATH, 'utf8'));

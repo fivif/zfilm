@@ -12,8 +12,8 @@
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { availableParallelism } from 'node:os';
-import { dirname, join, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { modelFile } from './local-models.mjs';
 
 /** The runtime and transformers.js, as the library publishes them. */
@@ -21,34 +21,25 @@ export const RUNTIME = 'models/onnxruntime-web-1.31.1/ort.wasm.min.mjs';
 export const TRANSFORMERS = 'models/transformers-4.3.2/transformers.min.js';
 
 /**
- * The runtime's folder, as its threads find its files: a path with forward slashes (a file: URL is fetched, which
- * Node cannot do from a worker).
+ * A file's folder as the runtime finds its files by. A path with forward slashes, as its threads read it (a file: URL
+ * is fetched, which Node cannot do from a worker); on Windows that path (`C:/…`) reads as an address of scheme `c:`,
+ * so there a file: URL, and the runtime runs on one thread (threads), with no worker to fetch it.
  */
-export const runtimeFolder = () => `${dirname(modelFile(RUNTIME)).split(sep).join('/')}/`;
+export const folderAddress = (/** @type {string} */ file, platform = process.platform) =>
+  platform === 'win32' ? pathToFileURL(`${dirname(file)}${sep}`).href : `${dirname(file).split(sep).join('/')}/`;
+export const runtimeFolder = () => folderAddress(modelFile(RUNTIME));
 
-/** How many threads the runtime takes: most of the computer, not all of it. */
-export const threads = () => Math.max(1, Math.min(4, availableParallelism() - 1));
+/** How many threads the runtime takes: most of the computer, not all of it; on Windows one, the only way it starts there. */
+export const threads = () => (process.platform === 'win32' ? 1 : Math.max(1, Math.min(4, availableParallelism() - 1)));
 
 /**
  * transformers.js on the library's runtime. It is its browser build (the Node build needs a native runtime): told to
  * use the runtime given to it, and loaded as on a page, every file it asks for read from this computer.
  */
 async function transformers() {
-  /* The runtime is a page's: it loads its loader and its wasm by fetching URLs. A path is not a URL — Node's fetch
-     answers "fetch failed", and no backend is left — so it is given a file: URL, and fetch is taught to read one. */
-  const before = globalThis.fetch;
-  globalThis.fetch = (async (input, init) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input?.url ?? '';
-    if (url.startsWith('file:')) {
-      try { return new Response(readFileSync(fileURLToPath(url))); } catch { return new Response(null, { status: 404 }); }
-    }
-    return before(input, init);
-  });
   const ort = await import(pathToFileURL(modelFile(RUNTIME)).href);
-  ort.env.wasm.wasmPaths = pathToFileURL(runtimeFolder()).href;
-  /* One thread: the runtime's worker path hands its loader to the ESM loader as a blob: URL, which Node cannot import
-     ("Only URLs with a scheme in: file, data, and node"), so more threads means no backend at all. */
-  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.wasmPaths = runtimeFolder();
+  ort.env.wasm.numThreads = threads();
   /** @type {any} */ (globalThis)[Symbol.for('onnxruntime')] = ort;
   const release = process.release;
   Object.defineProperty(process, 'release', { value: { name: 'openfilm' }, configurable: true, writable: true });

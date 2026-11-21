@@ -132,7 +132,9 @@ const CLIP_FIELDS = {
 const KEPT_ATTRIBUTE = /^(alt|title|lang|dir|data-[a-z0-9-]+|aria-[a-z]+)$/;
 /** What a track keeps of its element that says nothing to the film: a name, a class, a description. */
 const KEPT_TRACK_ATTRIBUTE = /^(id|class|title|lang|dir|data-[a-z0-9-]+|aria-[a-z]+)$/;
-const OVERRIDE_FIELDS = ['at', 'n', 't', 's', 'r', 'style', 'lock', 'text', 'fade'];
+const OVERRIDE_FIELDS = ['at', 'n', 't', 's', 'r', 'style', 'lock', 'text', 'split', 'fade'];
+/** How an element's words animate part by part (an override's `split`). */
+const SPLIT_FIELDS = ['by', 'animation', 'stagger', 'start', 'order'];
 /** A key of an override's style: a CSS property in camelCase, or a custom property as CSS writes it (`--accent`). */
 const STYLE_KEY = /^(?:[a-zA-Z]{1,40}|--[A-Za-z0-9_-]{1,60})$/;
 const BOX_FIELDS = ['x', 'y', 'w', 'h', 'r'];
@@ -192,6 +194,16 @@ function checkOverride(o, where, problems, kind) {
   }
   if (o.lock !== undefined && o.lock !== true) problems.push(`${where}lock is true, or not written.`);
   if (o.text !== undefined && (typeof o.text !== 'string' || o.text.length > 2000)) problems.push(`${where}text has to be text (at most 2000 characters).`);
+  if (o.split !== undefined) {
+    const sp = o.split;
+    if (!isObject(sp)) { problems.push(`${where}split has to be { "by": "char", "animation": "rise .5s ease-out", "stagger": 0.04 }.`); return; }
+    unknownKeys(sp, SPLIT_FIELDS, `${where}split: `, problems);
+    if (!['char', 'word', 'line'].includes(sp.by)) problems.push(`${where}split.by is "char", "word" or "line".`);
+    if (typeof sp.animation !== 'string' || !sp.animation || sp.animation.length > 200) problems.push(`${where}split.animation has to be an animation, as CSS writes one ("rise .5s ease-out").`);
+    if (!(isFinite(sp.stagger) && sp.stagger >= 0 && sp.stagger <= 10)) problems.push(`${where}split.stagger has to be seconds between parts, 0 to 10.`);
+    if (sp.start !== undefined && !(isFinite(sp.start) && sp.start >= 0)) problems.push(`${where}split.start has to be seconds, 0 or more.`);
+    if (sp.order !== undefined && !['forward', 'reverse', 'center', 'random'].includes(sp.order)) problems.push(`${where}split.order is "forward", "reverse", "center" or "random".`);
+  }
 }
 
 /** One clip, checked for what its file is. Returns the clip with its fields in their written order. */
@@ -241,7 +253,8 @@ function readClip(raw, where, problems) {
     problems.push(`${at}size is the px a page is laid out at, whole numbers up to ${PAGE_SIZE_MAX}: { "w": 1920, "h": 1080 }.`);
   }
   if (raw.overrides !== undefined) {
-    if (!Array.isArray(raw.overrides) || raw.overrides.length > 200) problems.push(`${at}overrides has to be a list (at most 200).`);
+    /* no count: a page may have as many layers as it draws, and each the person changed is an entry */
+    if (!Array.isArray(raw.overrides)) problems.push(`${at}overrides has to be a list.`);
     else {
       /* fades to the millisecond, as every time is */
       for (const o of raw.overrides) if (isObject(o) && Array.isArray(o.fade)) o.fade = o.fade.map((v) => (typeof v === 'number' && isFinite(v) ? toMs(v) : v));
@@ -278,6 +291,41 @@ function trimDashes(/** @type {string} */ name) {
   while (start < end && name[start] === '-') start++;
   while (end > start && name[end - 1] === '-') end--;
   return name.slice(start, end);
+}
+
+/**
+ * A clip's (or a page element's) effects, each a number in a custom property of its own (`--fx-blur: 4px`) that its
+ * `filter` reads, so each moves by keyframes of its own: its unit, its value when it does nothing, its CSS type, its
+ * filter (with that value as the fallback). A host registers them (registerEffects) so their keyframes ease.
+ */
+export const EFFECTS = Object.freeze({
+  blur: { unit: 'px', rest: 0, syntax: '<length>', filter: 'blur(var(--fx-blur, 0px))' },
+  brightness: { unit: '%', rest: 100, syntax: '<percentage>', filter: 'brightness(var(--fx-brightness, 100%))' },
+  contrast: { unit: '%', rest: 100, syntax: '<percentage>', filter: 'contrast(var(--fx-contrast, 100%))' },
+  saturate: { unit: '%', rest: 100, syntax: '<percentage>', filter: 'saturate(var(--fx-saturate, 100%))' },
+  hue: { unit: 'deg', rest: 0, syntax: '<angle>', filter: 'hue-rotate(var(--fx-hue, 0deg))' },
+  grayscale: { unit: '%', rest: 0, syntax: '<percentage>', filter: 'grayscale(var(--fx-grayscale, 0%))' },
+  invert: { unit: '%', rest: 0, syntax: '<percentage>', filter: 'invert(var(--fx-invert, 0%))' },
+  glow: { unit: 'px', rest: 0, syntax: '<length>', filter: 'drop-shadow(0 0 var(--fx-glow, 0px) rgb(255 255 255 / 0.85))' },
+  /* how much of a shape's stroke is drawn (0–100): its dash as long as its path, offset by what is not (no filter) */
+  trim: { unit: '', rest: 100, syntax: '<number>', filter: null },
+  /* a picture in 3D (a host turns it so about its middle, under a camera shared by the film): its depth, toward the
+     viewer, and its turn about its X and Y axes */
+  z: { unit: 'px', rest: 0, syntax: '<length>', filter: null },
+  rx: { unit: 'deg', rest: 0, syntax: '<angle>', filter: null },
+  ry: { unit: 'deg', rest: 0, syntax: '<angle>', filter: null },
+  /* a picture's anchor point (a host turns, sizes and moves it in 3D about there): where it is from its box's middle,
+     stage px */
+  ax: { unit: 'px', rest: 0, syntax: '<length>', filter: null },
+  ay: { unit: 'px', rest: 0, syntax: '<length>', filter: null },
+});
+
+/** The effects' custom properties registered in a window (the film's, a page's), so their keyframes ease. */
+export function registerEffects(win) {
+  if (!win?.CSS?.registerProperty) return;
+  for (const [name, { unit, rest, syntax }] of Object.entries(EFFECTS)) {
+    try { win.CSS.registerProperty({ name: `--fx-${name}`, syntax, inherits: false, initialValue: `${rest}${unit}` }); } catch { /* already */ }
+  }
 }
 
 /**
@@ -408,6 +456,14 @@ export function clipSpeed(clip) {
   if (kind === 'page' || kind === 'still') return 1;
   const v = clip.speed;
   return isFinite(v) && v >= SPEED_MIN && v <= SPEED_MAX ? v : 1;
+}
+
+/** A trimmed clip whose entire span is outside the source ranges being drawn. */
+export function clipOutsideRanges(clip, ranges) {
+  if (!ranges?.length || clip.time?.length !== 2) return false;
+  const start = clip.at ?? 0;
+  const end = start + (clip.time[1] - clip.time[0]) / clipSpeed(clip);
+  return ranges.every(([from, to]) => start >= to || end <= from);
 }
 
 /**
@@ -646,8 +702,13 @@ const VOID_TAGS = new Set(['img', 'meta', 'link', 'br', 'hr', 'base', 'input', '
 const RAW_TEXT = new Set(['script', 'style', 'iframe', 'textarea', 'title', 'xmp', 'noembed', 'noframes', 'noscript']);
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0' };
 
+/** A numeric reference as HTML reads it: 0, a surrogate or beyond 0x10FFFF is U+FFFD, never a throw. */
+const codePoint = (e) => {
+  const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+  return n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : '\uFFFD';
+};
 const decode = (v) => v.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, e) => {
-  if (e[0] === '#') return String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : Number(e.slice(1)));
+  if (e[0] === '#') return codePoint(e);
   return ENTITIES[e.toLowerCase()] ?? all;
 });
 const escapeAttr = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
@@ -729,8 +790,20 @@ function markup(text) {
   return out;
 }
 
-/** The line a place in the text is on, from 1. */
-const lineAt = (text, at) => { let n = 1; for (let i = 0; i < at; i++) if (text.charCodeAt(i) === 10) n++; return n; };
+/**
+ * The line a place in `text` is on, from 1: the text's line breaks found once (on the first place asked), each place
+ * looked up among them. Counted again from the start for each place, a film of hundreds of clips took seconds to read.
+ */
+function lineFinder(text) {
+  /** @type {number[] | null} */
+  let breaks = null;
+  return (/** @type {number} */ at) => {
+    if (!breaks) { breaks = []; for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) breaks.push(i); }
+    let lo = 0, hi = breaks.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (breaks[mid] < at) lo = mid + 1; else hi = mid; }
+    return lo + 1;
+  };
+}
 
 /** Seconds as a media fragment writes them: plain seconds, `mm:ss` or `hh:mm:ss`, each with a fraction. */
 function fragmentSeconds(v) {
@@ -761,6 +834,32 @@ export function declarations(style) {
   }
   take(style.length);
   return out;
+}
+
+/**
+ * The LUT files a video clip's picture is graded by, in the order they apply: its style's `--of-lut`, one or more
+ * `url(…)` naming color transform files (`.ctf`, `.clf`, `.cube`) from the film's folder, as written (SPEC.md). None for another kind of clip, or none
+ * written. The host grades the picture before the clip's CSS (seekable.mjs); a browser alone shows it as it is.
+ * @param {{ src?: unknown, sound?: unknown, style?: unknown } | null | undefined} clip @returns {string[]}
+ */
+export function lutsOf(clip) {
+  return kindOf(clip) === 'video' ? lutUrls(clip?.style) : [];
+}
+
+/**
+ * The files a page or a still clip is graded by (SPEC.md `--of-lut`), in order as written; none for any other clip.
+ * The browser draws its grade (color/page-grade.mjs). @param {{ src?: unknown, sound?: unknown, style?: unknown } | null | undefined} clip
+ */
+export function pictureLutsOf(clip) {
+  const kind = kindOf(clip);
+  return kind === 'page' || kind === 'still' ? lutUrls(clip?.style) : [];
+}
+
+/** The `url()`s of a style's `--of-lut`. @param {unknown} style @returns {string[]} */
+function lutUrls(style) {
+  if (typeof style !== 'string' || !style.includes('--of-lut')) return [];
+  const value = declarations(style).findLast(([prop]) => prop === '--of-lut')?.[1] ?? '';
+  return [...value.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]*))\s*\)/gi)].map((m) => (m[1] ?? m[2] ?? m[3]).trim()).filter(Boolean);
 }
 
 /** A number of `unit` (`56px`, `12deg`; a bare 0 too), or NaN. */
@@ -856,7 +955,8 @@ function clipOfTag(tag, where, problems) {
 export function readFilmFile(text) {
   const marks = markup(text);
   const problems = [];
-  const at = (m) => `${FILM_FILE}:${lineAt(text, m.start)}`;
+  const lineAt = lineFinder(text);
+  const at = (m) => `${FILM_FILE}:${lineAt(m.start)}`;
   let stage;
   let bodyStart = -1;
   let viewport = null;
@@ -948,7 +1048,7 @@ export function readFilmFile(text) {
       track.tail = pending;
       pending = [];
       tracks.push(track.raw);
-      lines.push({ line: lineAt(text, track.open.start), clips: track.clips.map((c) => c.line) });
+      lines.push({ line: lineAt(track.open.start), clips: track.clips.map((c) => c.line) });
       layout.tracks.push({ open: track.open, close: m, lead: track.lead, tail: track.tail, clips: track.clips.map((c) => c.at) });
       track = null;
       continue;
@@ -980,7 +1080,7 @@ export function readFilmFile(text) {
       const raw = clipOfTag(m, where, problems);
       if (raw) {
         track.raw.clips.push(raw);
-        track.clips.push({ line: lineAt(text, m.start), at: { start: m.start, end, lead: pending, named: Boolean(raw.id) } });
+        track.clips.push({ line: lineAt(m.start), at: { start: m.start, end, lead: pending, named: Boolean(raw.id) } });
       }
       pending = [];
       continue;

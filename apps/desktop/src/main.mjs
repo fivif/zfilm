@@ -1,5 +1,5 @@
 /**
- * OpenFilm for desktop: one window of tabs, a project in each, a chat on the left and Studio on the right, one page
+ * Zfilm for desktop: one window of tabs, a project in each, a chat on the left and Studio on the right, one page
  * per tab (tabs.mjs). A project is picked in Studio's projects window (the tabs' `+`), and its tab opens; with no tab
  * open, the window's page is the projects (HOME).
  *
@@ -10,24 +10,34 @@
  * ffmpeg, updates (preload.cjs). The window opens straight into the last project.
  */
 import { BaseWindow, Menu, Notification, WebContentsView, app, clipboard, dialog, ipcMain, nativeTheme, safeStorage, screen, shell } from 'electron';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { problemLine, problemsFile, recentProblems, recordProblem } from 'openfilm/problems';
 import { FLAVOR, IDENTITY, PRODUCT_NAME } from './flavor.mjs';
 import { folderDialogOptions, programDialogOptions } from './folder-dialog.mjs';
 import { childEnvironment, lastPathSource, loginShellEnvironment } from './environment.mjs';
 import { gatherAppReport } from './app-report.mjs';
+import { savedRoot } from 'openfilm/locations';
+import { createLibraryImportService } from './library-import-service.mjs';
+import { createMediaAnalyzer } from './library-agent-analysis.mjs';
 import { startWindowStudio } from './studio.mjs';
+import { studioSecrets } from './studio-secrets.mjs';
 import { CHAT_MIN, STUDIO_MIN, WINDOW_MIN, placeOnDisplays, readWindowState, writeWindowState } from './window-state.mjs';
 import { createPagePresentation, paintPage, preparePage, revealPage, syncPagePointer } from './page-presentation.mjs';
 import { closeTabOrWindow, keepWindowOnClose, quitAfterStudio } from './window-lifecycle.mjs';
 import { appLanguage } from './i18n/language.mjs';
+import { PAGE_FAILURE_WORDS } from './i18n/page-failure.mjs';
 import { applicationMenuTemplate } from './menu.mjs';
 import { registerLocalAgentIpc } from './local-agents-ipc.mjs';
 import { readPreferences, registerChatIpc } from './chat-ipc.mjs';
 import { registerSkillsIpc } from './skills-ipc.mjs';
+import { createConnectors, registerConnectorsIpc } from './connectors.mjs';
 import { createRoster } from './agent-roster.mjs';
-import { AGENTS, checkAgentProgram, closeEverySession, diagnoseAgent, forgetAgentStatus, listAgents, localAgent, openAgentInstaller, openAgentSignIn, setChosenPaths, signOutAgent } from './agents.mjs';
+import { createZfilmAgent } from './openfilm-agent.mjs';
+import { createAgentCatalogs } from './agent-catalogs.mjs';
+import { createAgentUpdates } from './agent-updates.mjs';
+import { AGENTS, checkAgentProgram, closeEverySession, diagnoseAgent, forgetAgentStatus, listAgents, localAgent, openAgentInstaller, openAgentUpdate, openAgentSignIn, setChosenPaths, signOutAgent } from './agents.mjs';
 import { agentUsage, forgetAgentUsage } from './agent-usage.mjs';
 import { installOpenfilmCommand } from './openfilm-command.mjs';
 import { startUpdates } from './updates.mjs';
@@ -36,10 +46,8 @@ import { PATH_SEP } from './environment.mjs';
 import { firstWindowsApps } from './windows-apps.mjs';
 import { createTabs, projectGone } from './tabs.mjs';
 import { turnNotice } from './turn-notices.mjs';
-import { restartDelay } from './studio-restart.mjs';
-import { savedRoot } from 'openfilm/locations';
-import { createLibraryImportService } from './library-import-service.mjs';
-import { createMediaAnalyzer } from './library-agent-analysis.mjs';
+import { studioRestarts } from './studio-restart.mjs';
+import { PROTOCOL, createLinks, linkFromArgv } from './deep-links.mjs';
 
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 const mac = process.platform === 'darwin';
@@ -49,6 +57,9 @@ const overlayColours = (t) => ({ color: t === 'dark' ? '#111114' : '#e9e9eb', sy
 
 /* HTML-in-Canvas in Studio's viewer, as in the renderer (the `openfilm` package's src/host.mjs) */
 app.commandLine.appendSwitch('enable-blink-features', 'CanvasDrawElement');
+/* Some Windows networks/drivers fail Chromium's HTTP/3 requests in the main process. Use TCP for downloads
+   and update checks as well as the window's requests, before any network session is created. */
+app.commandLine.appendSwitch('disable-quic');
 if (mac) {
   /* Flush small Canvas2D batches: blur on hundreds of strokes otherwise queues gigabytes of intermediate
      textures. Keep GPU canvas-to-WebGL uploads fast without changing the rest of Graphite's batching. */
@@ -65,50 +76,41 @@ if (mac) {
 app.setName(PRODUCT_NAME);
 /* Windows shows a notification only for the app ID the Start menu shortcut carries: the installer's appId (release.mjs) */
 if (windows) app.setAppUserModelId(IDENTITY.bundleId);
-/* The app's own folder under the old name is taken over, once, before anything is written there: renaming it keeps
-   the window's place and the page's stored state, which a program that only changed its name would lose. */
-/**
- * Studio's home, and the one it had under the old name taken over: settings, keys and the library's cache are in there,
- * and a program that only changed its name would open empty beside a folder holding all of it. Entries the new home
- * already has are left alone; the old folder goes when it is empty.
- */
-function studioHomeFolder() {
-  const home = app.getPath('home');
-  const after = join(home, '.zfilm');
-  const before = join(home, '.openfilm');
-  if (!existsSync(after) || !existsSync(before)) {
-    if (!existsSync(after) && existsSync(before)) { try { renameSync(before, after); } catch { return before; } }
-    return after;
-  }
-  try {
-    for (const name of readdirSync(before)) {
-      if (existsSync(join(after, name))) continue;
-      try { renameSync(join(before, name), join(after, name)); } catch { /* leave it where it is */ }
-    }
-    if (!readdirSync(before).length) rmdirSync(before);
-  } catch { /* kept as it is */ }
-  return after;
-}
-
-function takeOverDataFolder() {
-  const appData = app.getPath('appData');
-  const after = join(appData, PRODUCT_NAME);
-  const before = join(appData, 'openfilm');
-  if (after === before || existsSync(after) || !existsSync(before)) return after;
-  try { renameSync(before, after); } catch { return before; }
-  return after;
-}
-
-app.setPath('userData', IDENTITY.userData ?? takeOverDataFolder());
+app.setPath('userData', IDENTITY.userData ?? join(app.getPath('appData'), PRODUCT_NAME));
 const DATA = app.getPath('userData');
 const LOGS = join(DATA, 'logs');
+const STUDIO_HOME = IDENTITY.studioHome ?? process.env.OPENFILM_HOME ?? join(app.getPath('home'), '.openfilm');
+const STUDIO_PROBLEMS = problemsFile(STUDIO_HOME);
 mkdirSync(LOGS, { recursive: true });
 const log = (line) => { try { appendFileSync(join(LOGS, 'studio.log'), line); } catch { /* no log */ } };
+const studioProblem = (step, what, code) => {
+  recordProblem({ area: 'studio', step, what, code, version: app.getVersion() }, { file: STUDIO_PROBLEMS });
+};
+
+/* `openfilm://` links (deep-links.mjs): a page of openfilm.dev opens the app on what it names. Registered as the app
+   that opens them (in development, this Electron with this app's folder); macOS sends one as `open-url`, even before
+   the app is ready; Windows in the arguments, of this instance or of a second one */
+const links = createLinks({
+  send: (link) => {
+    /* before the window and its page are made (the app opening on a link), it waits for the page to take it */
+    try {
+      const page = activeView();
+      if (!page || page.webContents.isLoading()) return false;
+      focusWindow();
+      page.webContents.send('desktop:open-link', link);
+      return true;
+    } catch { return false; }
+  },
+});
+if (process.defaultApp && process.argv[1]) app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [resolve(process.argv[1])]);
+else app.setAsDefaultProtocolClient(PROTOCOL);
+app.on('open-url', (event, url) => { event.preventDefault(); links.came(url); });
+links.came(linkFromArgv(process.argv));
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => focusWindow());
+  app.on('second-instance', (_event, argv) => { focusWindow(); links.came(linkFromArgv(argv)); });
   app.whenReady().then(start).catch((error) => {
     console.error(error);
     app.exit(1);
@@ -122,6 +124,7 @@ let tabs = null;
 /** the page of each tab that has one (a tab left behind long enough has none until it is shown again) */
 /** @type {Map<string, WebContentsView>} */
 const views = new Map();
+const unresponsivePages = new WeakSet();
 let pagePresentation = null;
 /** the page in front */
 const activeView = () => views.get(pagePresentation?.currentId() ?? tabs?.activeId() ?? HOME) ?? null;
@@ -148,12 +151,19 @@ const tellFfmpeg = (state) => { ffmpegFound = state; broadcast('desktop:ffmpeg',
 /** @type {ReturnType<typeof startUpdates> | null} */
 let updates = null;
 let quitting = false;
+let studioRestartsOnExit;
+function markQuitting() {
+  quitting = true;
+  studioRestartsOnExit?.stop();
+}
 let cancelWindowClose = () => {};
 /** @type {ReturnType<typeof registerLocalAgentIpc> | null} */
 let localAgents = null;
 let libraryImports = null;
 /** @type {ReturnType<typeof createRoster> | null} */
 let roster = null;
+let agentCatalogs = null;
+let agentUpdates = null;
 
 /** the board Studio's panes sit on (its --bg-app), so the window never flashes another color */
 const BACKGROUND = { light: '#e4e4e8', dark: '#141414' };
@@ -219,9 +229,15 @@ function makeView(tabId) {
   v.setBounds({ x: 0, y: 0, width, height });
   guard(v.webContents, (url) => Boolean(studio) && url.startsWith(`${studio.origin}/`));
   /* what went wrong with the page, for the log (logs/studio.log) */
-  v.webContents.on('render-process-gone', (_event, details) => log(`page: renderer gone (${details.reason}, ${details.exitCode})\n`));
+  v.webContents.on('render-process-gone', (_event, { reason, exitCode }) => {
+    if (reason === 'clean-exit' || quitting) return;
+    const what = `Page renderer exited (${reason}, ${exitCode})`;
+    log(`${new Date().toISOString()} ${what}\n`);
+    studioProblem('page renderer', what, String(exitCode));
+  });
   v.webContents.on('did-fail-load', (_event, code, description, url, mainFrame) => { if (mainFrame && code !== -3 && pagePresentation?.wantedId() === tabId) log(`page: ${description} (${code}) loading ${url.replace(/key=[^&]+/, 'key=…')}\n`); });
-  v.webContents.on('unresponsive', () => log('page: not responding\n'));
+  v.webContents.on('unresponsive', () => { unresponsivePages.add(v); log('page: not responding\n'); });
+  v.webContents.on('responsive', () => unresponsivePages.delete(v));
   /* the page gone (a crash): it comes back where it was; the agents' turns go on in this process meanwhile */
   v.webContents.on('render-process-gone', (_event, details) => { if (details.reason !== 'clean-exit' && !quitting) setTimeout(() => { if (!v.webContents.isDestroyed()) v.webContents.reload(); }, 500); });
   return v;
@@ -270,15 +286,47 @@ function presentation() {
       return { view: v, ready };
     },
     resume: windows ? undefined : (id, v) => stage(id, v, () => paintPage(v.webContents, frameOptions(id))),
-    present(_id, v) {
+    canKeep: v => !unresponsivePages.has(v) && !v.webContents.isDestroyed() && !v.webContents.isCrashed(),
+    present(id, v) {
       if (!win) return;
       revealPage(win.contentView, v, views.values());
       if (!windows) v.webContents.setBackgroundThrottling(true);
+      tabs?.activate(id === HOME ? null : id);
+      tellTabs();
       /* the pages now behind it are told: one waiting to be covered (its projects window opening another tab) is done */
       for (const page of views.values()) if (page !== v && !page.webContents.isDestroyed()) page.webContents.send('desktop:tabs:covered');
     },
     discard: destroyView,
-    onError: (error) => { if (!quitting) log(`page: could not prepare replacement (${String(error.message).replace(/key=[^&\s)]+/g, 'key=…')})\n`); },
+    onError: reportPageFailure,
+  });
+}
+
+let pageFailureDialog = null;
+function reportPageFailure(error, id, retained) {
+  if (quitting || !win) return;
+  log(`page: could not prepare replacement (${String(error.message).replace(/key=[^&\s)]+/g, 'key=…')})\n`);
+  if (retained) {
+    tabs?.activate(retained === HOME ? null : retained);
+    tellTabs();
+  }
+  // A native message is visible even if the editor has stopped processing events.
+  // If Projects also fails, expose a way to retry even when there is no usable page.
+  if (id === HOME && !retained) {
+    if (pageFailureDialog) pageFailureDialog.abort();
+  } else if (pageFailureDialog) return;
+  const controller = new AbortController();
+  pageFailureDialog = controller;
+  const retry = id === HOME && !retained;
+  const language = appLanguage(state.language, app.getPreferredSystemLanguages());
+  const [message, detail, tryAgain, dismiss] = PAGE_FAILURE_WORDS[language] ?? PAGE_FAILURE_WORDS.en;
+  // A window-owned sheet lets the main process continue preparing the fallback.
+  void dialog.showMessageBox(win, {
+    type: 'warning', title: PRODUCT_NAME, message, detail, signal: controller.signal,
+    buttons: retry ? [tryAgain, dismiss] : [dismiss], cancelId: retry ? 1 : 0,
+  }).then(({ response }) => {
+    if (retry && response === 0 && !quitting && pagePresentation?.wantedId() === HOME && pagePresentation.currentId() !== HOME) void showPage(HOME);
+  }).catch(error => log(`page: could not show recovery dialog (${error.message})\n`)).finally(() => {
+    if (pageFailureDialog === controller) pageFailureDialog = null;
   });
 }
 
@@ -377,12 +425,14 @@ function openInTabs(to) {
  * first time, the last project's; none: the projects.
  */
 async function openTabs() {
-  const listed = (await studioApi('/api/projects').catch(() => ({ projects: [] }))).projects;
-  const projects = listed.filter((p) => !projectGone(listed, p.id));
+  const listed = (await studioApi('/api/projects').catch(() => null))?.projects;
+  const projects = listed?.filter((p) => !projectGone(listed, p.id)) ?? [];
   tabs = createTabs({ saved: state.tabs ?? null });
-  /* a tab of a project no longer there is left out, and not kept to open again */
-  const known = new Set(projects.map((p) => p.id));
-  tabs.closeProjects(tabs.list().map((t) => t.projectId).filter((id) => !known.has(id)));
+  /* A failed project-list request leaves the saved tabs available for another try. */
+  if (listed) {
+    const known = new Set(projects.map((p) => p.id));
+    tabs.closeProjects(tabs.list().map((t) => t.projectId).filter((id) => !known.has(id)));
+  }
   if (!tabs.list().length && !state.tabs && projects[0]) tabs.open({ projectId: projects[0].id, title: projects[0].name });
   const front = tabs.activeId();
   if (front) showTab(front);
@@ -402,14 +452,33 @@ async function tellTabsWorking({ working = agentFolders.working, asking = agentF
   if (tabs.setAgents(ids(agentFolders.working), ids(agentFolders.asking))) tellTabs();
 }
 
-async function studioApi(path, method = 'GET', body = undefined) {
+async function studioApi(path, method = 'GET', body = undefined, signal = undefined) {
   const res = await fetch(`${studio.origin}${path}`, {
     method,
+    signal,
     headers: { 'x-studio-key': studio.key, ...(body ? { 'content-type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `Studio answered ${res.status}`);
   return res.json();
+}
+
+/** A report the main process can copy without calling the Studio utility or an agent. */
+function offlineStudioReport() {
+  let recent;
+  try {
+    recent = recentProblems({ file: STUDIO_PROBLEMS, days: 7 }).filter((p) => p.area === 'studio').slice(-12).map(problemLine);
+  } catch {
+    recent = ['The local problem log could not be read.'];
+  }
+  return [
+    `Zfilm ${app.getVersion()} (${FLAVOR}) · ${process.platform} ${process.arch} · Electron ${process.versions.electron}`,
+    `Report copied at ${new Date().toISOString()}`,
+    `Studio utility process: ${studio?.child.pid == null ? 'not running' : 'present'}`,
+    '',
+    'Recent Studio problems:',
+    ...(recent.length ? recent : ['No Studio problems recorded in the last 7 days.']),
+  ].join('\n');
 }
 
 /**
@@ -432,6 +501,15 @@ async function openProjectFolder() {
     void dialog.showMessageBox(win, { type: 'warning', message: 'This folder can’t be opened as a project.', detail: error.message });
   }
 }
+
+/** What the app asks before an agent changes something in a connected service (connectors.mjs `confirm`). */
+const CONNECTOR_ASK = {
+  en: { message: 'Let the agent use “{tool}” in {name}?', detail: 'It may change what you have in {name}.', once: 'Allow once', always: 'Allow while Zfilm is open', no: 'Don’t allow' },
+  'zh-CN': { message: '允许智能体在 {name} 里使用「{tool}」吗？', detail: '这会改动你在 {name} 里的内容。', once: '允许一次', always: '本次打开期间都允许', no: '不允许' },
+  ja: { message: 'エージェントに {name} の「{tool}」を使わせますか？', detail: '{name} の中身が変わることがあります。', once: '今回だけ許可', always: 'Zfilm を開いている間は許可', no: '許可しない' },
+  ko: { message: '에이전트가 {name}에서 「{tool}」을(를) 쓰도록 허용할까요?', detail: '{name}에 있는 내용이 바뀔 수 있습니다.', once: '이번만 허용', always: 'Zfilm이 열려 있는 동안 허용', no: '허용 안 함' },
+  es: { message: '¿Dejar que el agente use «{tool}» en {name}?', detail: 'Puede cambiar lo que tienes en {name}.', once: 'Permitir una vez', always: 'Permitir mientras Zfilm esté abierto', no: 'No permitir' },
+};
 
 /* the own key, sealed with the system's keychain where there is one (macOS Keychain, Windows DPAPI) */
 const seal = (text) => (safeStorage.isEncryptionAvailable() ? Buffer.concat([Buffer.from('enc:'), safeStorage.encryptString(text)]) : Buffer.from(`raw:${text}`));
@@ -456,7 +534,7 @@ const NOTICES_KEPT = 20;
 
 /**
  * A turn of the chat's done, stopped by an error, or waiting for the person's answer: a notification of the system's,
- * while the window is not in front and Settings › General leaves them on (turn-notices.mjs). Clicking it brings the
+ * while the window is not in front and Settings › Advanced has them on (turn-notices.mjs). Clicking it brings the
  * window back on that project's tab. The taskbar button flashes (Windows), the Dock icon bounces once (macOS).
  * @param {{ kind: 'done' | 'failed' | 'asking', agent: string, cwd: string, meta: any, error?: string }} turn
  */
@@ -488,7 +566,7 @@ async function noticeTurn({ kind, agent, cwd, meta, error }) {
 
 /** Tell Studio which folders the chat's agents are working in now. */
 function tellWorking(/** @type {string[]} */ folders) {
-  studio?.child.postMessage({ type: 'working', folders });
+  if (studio?.child.pid != null) studio.child.postMessage({ type: 'working', folders });
   void tellTabsWorking({ working: folders });
 }
 
@@ -509,20 +587,26 @@ function answerStudio(message, reply) {
   if (!agent || !ready.includes(agent) || !localAgents) { reply({ type: 'answer', id: message.id, error: 'No agent is connected.', code: 'no-agent' }); return; }
   const stop = new AbortController();
   asked.set(message.id, stop);
-  localAgents.ask(agent, String(message.text ?? ''), stop.signal, message.model?.options, message.images)
+  /* asked for as it comes (a note being written): each piece of the answer sent on its own */
+  const onText = message.stream ? (delta) => reply({ type: 'answer-part', id: message.id, delta }) : undefined;
+  localAgents.ask(agent, String(message.text ?? ''), stop.signal, message.model?.options, message.images, onText)
     .then((text) => reply({ type: 'answer', id: message.id, text }))
     .catch((error) => { if (!stop.signal.aborted) reply({ type: 'answer', id: message.id, error: error?.message ?? String(error), ...(error?.code ? { code: String(error.code) } : {}) }); })
     .finally(() => asked.delete(message.id));
 }
 
-/** when the running Studio started, and the wait before it did (studio-restart.mjs) */
-let startedAt = 0;
-let restartWait = 0;
+/** Studio's own key and the vault of the person's service keys, opened from the keychain once (studio-secrets.mjs) */
+let secrets;
 
 async function runStudio(env) {
-  startedAt = Date.now();
-  studio = await startWindowStudio({
+  if (quitting) return;
+  if (secrets === undefined) secrets = studioSecrets({ dataDir: DATA, available: safeStorage.isEncryptionAvailable(), seal, unseal, log });
+  let startedAt;
+  const next = await startWindowStudio({
+    secrets,
     onAsk: answerStudio,
+    /* a project renamed: the chat's agents between turns in its folder stop (their next turn resumes them) */
+    onRelease: (folder) => localAgents?.release(folder),
     home: env.OPENFILM_HOME,
     port: IDENTITY.studioPort,
     /* Studio serves the window's page as its editor (shell/: its editor with the chat beside it) */
@@ -540,20 +624,36 @@ async function runStudio(env) {
     },
     onExit: (code) => {
       if (quitting) return;
-      /* stopping again and again at once: started again later each time (studio-restart.mjs) */
-      restartWait = restartDelay(restartWait, Date.now() - startedAt);
-      log(`Studio stopped (${code}); starting it again in ${restartWait / 1000} s\n`);
-      setTimeout(() => void runStudio(env).catch((error) => log(`Studio did not start again: ${error.message}\n`)), restartWait);
+      const what = `Studio process exited (${code})`;
+      log(`${new Date().toISOString()} ${what}\n`);
+      studioProblem('utility process', what, String(code));
+      studioRestartsOnExit.afterExit(startedAt ? Date.now() - startedAt : 0);
     },
   });
+  if (quitting) { await next.quit(); return; }
+  startedAt = Date.now();
+  studio = next;
   /* a Studio started again hears where the agents are working */
   tellWorking(localAgents?.working() ?? []);
   /* the first time, the tabs; a Studio started again: each page stays where it was */
   if (!tabs) { await openTabs(); return; }
   for (const [id, v] of views) {
-    const at = v.webContents.getURL();
-    await v.webContents.loadURL(pageAddress(tabs.get(id), at.startsWith('http') ? new URL(at).pathname : null));
+    const page = v.webContents;
+    if (page.isDestroyed()) continue;
+    const at = page.getURL();
+    /* A tab may close or navigate during recovery. Each remaining tab still gets the new Studio address. */
+    void page.loadURL(pageAddress(tabs.get(id), at.startsWith('http') ? new URL(at).pathname : null)).catch(() => {});
   }
+}
+
+/** The desktop owns Studio. Its quit-when-idle endpoint reports work without shutting it down. */
+async function studioBusy() {
+  if (!studio) return false;
+  const res = await fetch(`${studio.origin}/api/quit`, {
+    method: 'POST', headers: { 'x-studio-key': studio.key, 'content-type': 'application/json' },
+    body: JSON.stringify({ whenIdle: true }), signal: AbortSignal.timeout(3000),
+  });
+  return res.status === 409;
 }
 
 async function start() {
@@ -565,17 +665,12 @@ async function start() {
     onState: (next) => broadcast('desktop:update', next),
     prepareRestart: async () => {
       if (localAgents?.isBusy()) return { ok: false, error: 'agent-busy' };
-      /* Studio's quit-when-idle answers 409 while it exports; otherwise the window's Studio stays (studio-process.mjs
-         `stays`, 423), and is stopped in beforeInstall. No answer: no Studio, no export to lose. */
-      const res = studio && await fetch(`${studio.origin}/api/quit`, {
-        method: 'POST', headers: { 'x-studio-key': studio.key, 'content-type': 'application/json' },
-        body: JSON.stringify({ whenIdle: true }), signal: AbortSignal.timeout(3000),
-      }).catch(() => null);
-      return res?.status === 409 ? { ok: false, error: 'exporting' } : { ok: true };
+      return await studioBusy().catch(() => false) ? { ok: false, error: 'exporting' } : { ok: true };
     },
     /* what before-quit would do, done first (`quitting`), so the quit Squirrel starts is not held up or cancelled */
     beforeInstall: async () => {
-      quitting = true;
+      markQuitting();
+      agentCatalogs?.close();
       localAgents?.closeAll();
       closeEverySession();
       for (const v of views.values()) v.webContents.on('will-prevent-unload', (event) => event.preventDefault());
@@ -593,11 +688,8 @@ async function start() {
   const env = childEnvironment({
     shell: shellEnv,
     extra: {
-      OPENFILM_HOME: IDENTITY.studioHome ?? process.env.OPENFILM_HOME ?? studioHomeFolder(),
-      /* Node's fetch reads the proxy settings only with this on: the library comes from a host many people reach
-         through a proxy, and asking for thousands of files without it would fail where the browser works */
-      ...(process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || process.env.ALL_PROXY
-        ? { NODE_USE_ENV_PROXY: '1' } : {}),
+      OPENFILM_HOME: STUDIO_HOME,
+      ...(app.isPackaged ? { OPENFILM_INSTALL_DIR: mac ? dirname(dirname(process.resourcesPath)) : dirname(process.execPath) } : {}),
       ...(FLAVOR !== 'release' ? { OPENFILM_ACCOUNT_DEVICE: PRODUCT_NAME } : {}),
       ...((IDENTITY.library ?? process.env.OPENFILM_LIBRARY) ? { OPENFILM_LIBRARY: IDENTITY.library ?? process.env.OPENFILM_LIBRARY } : {}),
       /* a flavour with a home of its own still shares the person's library (src/locations.mjs) */
@@ -607,7 +699,9 @@ async function start() {
       ...(IDENTITY.studioHome || process.env.OPENFILM_EXPORTS ? {} : { OPENFILM_EXPORTS: app.getPath('desktop') }),
       /* another examples index (a file, to try one), passed through when run from source */
       ...(process.env.OPENFILM_EXAMPLES_INDEX ? { OPENFILM_EXAMPLES_INDEX: process.env.OPENFILM_EXAMPLES_INDEX } : {}),
-      /* another OpenFilm service (a local one, to develop it), passed through when run from source */
+      /* another Community library catalog (a local build or the preview channel, to try one), passed through when run from source */
+      ...(process.env.OPENFILM_COMMUNITY_LIBRARY_URL ? { OPENFILM_COMMUNITY_LIBRARY_URL: process.env.OPENFILM_COMMUNITY_LIBRARY_URL } : {}),
+      /* another Zfilm service (a local one, to develop it), passed through when run from source */
       ...(process.env.OPENFILM_API_URL ? { OPENFILM_API_URL: process.env.OPENFILM_API_URL } : {}),
     },
   });
@@ -652,7 +746,10 @@ async function start() {
   win.on('moved', saveState);
   win.on('enter-full-screen', () => broadcast('desktop:full-screen', true));
   win.on('leave-full-screen', () => broadcast('desktop:full-screen', false));
-  cancelWindowClose = keepWindowOnClose(win, { mac, isQuitting: () => quitting, save: saveState });
+  cancelWindowClose = keepWindowOnClose(win, {
+    mac, isQuitting: () => quitting, save: saveState,
+    ...(windows ? { shouldMinimize: async () => Boolean(localAgents?.isBusy()) || await studioBusy() } : {}),
+  });
   win.on('closed', () => { win = null; views.clear(); pagePresentation = null; app.quit(); });
 
   ipcMain.on('desktop:theme', (event, next) => { if (fromPage(event)) setTheme(next); });
@@ -665,6 +762,8 @@ async function start() {
     try { writeWindowState(DATA, state); } catch { /* kept until next time */ }
     showMenu();
   });
+  /* the page is up and takes the link that opened the app, if one did (deep-links.mjs) */
+  ipcMain.handle('desktop:take-link', (event) => (fromPage(event) ? links.take() : null));
   ipcMain.handle('desktop:hello', (event) => {
     if (!fromPage(event)) throw new Error('not the window\'s page');
     return { flavor: FLAVOR, version: app.getVersion(), ffmpeg: ffmpegFound, update: updates?.snapshot() ?? null, chatOpen: state.chatOpen, chatWidth: state.chatWidth, chatMin: CHAT_MIN, studioMin: STUDIO_MIN, fullScreen: Boolean(win?.isFullScreen()) };
@@ -702,7 +801,7 @@ async function start() {
   tabHandle('desktop:tabs:close', (self, { id }) => { void closeTab(typeof id === 'string' ? id : self); return { ok: true }; });
   tabHandle('desktop:tabs:move', (_self, { id, index }) => { if (tabs?.move(String(id), Number(index))) tellTabs(); return { ok: true }; });
   /* what a page shows now: its project's title, an export's progress; or its project gone */
-  tabHandle('desktop:tabs:report', (self, { title, exporting, gone }) => {
+  tabHandle('desktop:tabs:report', (self, { title, exporting, exportStage, generating, gone }) => {
     if (!tabs) return { ok: false };
     /* its project gone (deleted, in this page or another; its folder gone): its tab closes, without asking. Asked of
        Studio first: a tab closed stops its agent, and a project missing only film.html is not gone (tabs.mjs projectGone) */
@@ -713,7 +812,12 @@ async function start() {
       }
       return { ok: true };
     }
-    tabs.report(self, { ...(typeof title === 'string' ? { title: title.slice(0, 200) } : {}), ...(exporting !== undefined ? { exporting: typeof exporting === 'number' ? exporting : null } : {}) });
+    tabs.report(self, {
+      ...(typeof title === 'string' ? { title: title.slice(0, 200) } : {}),
+      ...(exporting !== undefined ? { exporting: Number.isFinite(exporting) ? exporting : null } : {}),
+      ...(exportStage !== undefined ? { exportStage: typeof exportStage === 'string' ? exportStage.slice(0, 120) : null } : {}),
+      ...(typeof generating === 'boolean' ? { generating } : {}),
+    });
     tellTabs();
     return { ok: true };
   });
@@ -736,10 +840,33 @@ async function start() {
   }, 60_000).unref?.();
 
   /* the agents: Studio's home and library go with them, so the `openfilm` they run finds this window's Studio */
-  /* the person's own skills: Skills/ beside this app's projects (~/Movies/OpenFilm/Skills), as its `openfilm` finds them */
-  /* which official skills are installed and which skills are off: the prefs.json every OpenFilm here shares (openfilm/skills usableSkills) */
+  /* the person's own skills: Skills/ beside this app's projects (~/Movies/Zfilm/Skills), as its `openfilm` finds them */
+  /* which official skills are installed and which skills are off: the prefs.json every Zfilm here shares (openfilm/skills usableSkills) */
   const prefsHome = env.OPENFILM_SHARED_HOME || env.OPENFILM_HOME;
   const mySkills = process.env.OPENFILM_SKILLS || (env.OPENFILM_LIBRARY ? join(dirname(env.OPENFILM_LIBRARY), 'Skills') : (await import('openfilm/skills')).mySkillsDir());
+  /* every connector there is (openfilm/plugins: a plugin with a .mcp.json), by its first remote server */
+  const connectors = createConnectors({
+    dataDir: DATA, seal, unseal, log: (line) => log(`${line}\n`),
+    openExternal: (url) => shell.openExternal(url),
+    defs: async () => (await import('openfilm/plugins')).pluginStates(prefsHome).flatMap((p) => {
+      const remote = Object.values(p.mcpServers ?? {}).find((server) => server.type === 'http');
+      return remote ? [{ id: p.id, title: p.title?.en ?? p.id, url: remote.url }] : [];
+    }),
+    onChange: () => { void connectors.states().then((states) => broadcast('desktop:connectors', states)); },
+    /* a tool that may change something in the service: the person says first, whatever the agent */
+    confirm: async ({ title, toolTitle, input }) => {
+      const words = CONNECTOR_ASK[appLanguage(state.language, app.getPreferredSystemLanguages())] ?? CONNECTOR_ASK.en;
+      const fill = (text) => text.replaceAll('{name}', title).replaceAll('{tool}', toolTitle);
+      const shown = JSON.stringify(input, null, 1);
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'question', title: PRODUCT_NAME, message: fill(words.message),
+        detail: `${fill(words.detail)}${shown && shown !== '{}' ? `\n\n${shown.length > 700 ? `${shown.slice(0, 700)}…` : shown}` : ''}`,
+        buttons: [words.once, words.always, words.no], defaultId: 0, cancelId: 2, noLink: true,
+      });
+      return response === 0 ? 'once' : response === 1 ? 'always' : 'no';
+    },
+  });
+  app.on('will-quit', () => { void connectors.close(); });
   localAgents = registerLocalAgentIpc(ipcMain, {
     trusted: fromPage,
     log,
@@ -750,12 +877,17 @@ async function start() {
     /* a turn done, stopped or waiting, told by the system while the window is not in front */
     onTurn: (turn) => void noticeTurn(turn),
     onConnectionResult: (id, error) => roster?.recordConnectionResult(id, error),
+    isAgentUpdating: (id) => agentUpdates?.state(id).status === 'updating',
     /* the `openfilm` command first (with the app's ffmpeg and browser in it); the app's ffmpeg last, for a computer
        that has none of its own: the person's own ffmpeg and browsers are what the agent's commands use */
-    binDir: installOpenfilmCommand(DATA, { ffmpeg: ffmpegHere, env: browsers }),
+    binDir: installOpenfilmCommand(DATA, { ffmpeg: ffmpegHere, env: {
+      ...browsers,
+      ...(env.OPENFILM_INSTALL_DIR ? { OPENFILM_INSTALL_DIR: env.OPENFILM_INSTALL_DIR } : {}),
+    } }),
     fallbackDir: ffmpegHere,
     env: {
       OPENFILM_HOME: env.OPENFILM_HOME,
+      ...(env.OPENFILM_INSTALL_DIR ? { OPENFILM_INSTALL_DIR: env.OPENFILM_INSTALL_DIR } : {}),
       ...(env.OPENFILM_API_URL ? { OPENFILM_API_URL: env.OPENFILM_API_URL } : {}),
       ...(env.OPENFILM_LIBRARY ? { OPENFILM_LIBRARY: env.OPENFILM_LIBRARY } : {}),
       ...(env.OPENFILM_SHARED_HOME ? { OPENFILM_SHARED_HOME: env.OPENFILM_SHARED_HOME } : {}),
@@ -763,9 +895,11 @@ async function start() {
     harness: async (id) => roster?.harness(id) ?? null,
     /* Developer mode: an agent whose own record lacks what its model got logs it here (agent-logs.mjs) */
     logDir: () => (readPreferences(DATA).developer ? join(DATA, 'agent-logs') : null),
-    /* each session's skills: its maker's, OpenFilm's, and of the person's own those let in (agent-skills.mjs) */
-    skills: { dataDir: DATA, mine: mySkills, prefsHome },
+    /* each session's skills: its maker's, Zfilm's, and of the person's own those let in (agent-skills.mjs) */
+    skills: { dataDir: DATA, mine: mySkills, prefsHome, connectorsFor: (servers) => connectors.forSession(servers) },
   });
+  /* the connectors: signed in here once, reached by every agent at their doors (connectors.mjs) */
+  registerConnectorsIpc(ipcMain, connectors, { trusted: fromPage, log });
   /* the composer's Skills button */
   registerSkillsIpc(ipcMain, {
     trusted: fromPage,
@@ -780,8 +914,30 @@ async function start() {
     log,
   });
   /* Settings → Agents (in Studio's page) and the chat's agent menu: one roster, both told of every change */
-  roster = createRoster({
+  const openfilmAgent = createZfilmAgent({
     dataDir: DATA,
+    readAccount: (options) => studio.readAccount(options),
+    signIn: () => studioApi('/api/providers/openfilm/sign-in', 'POST'),
+    cancelSignIn: () => studioApi('/api/providers/openfilm/sign-in/cancel', 'POST'),
+    signOut: () => studioApi('/api/providers/openfilm/key', 'DELETE'),
+    closeSessions: () => localAgents?.closeAgent('openfilm'),
+    refreshSessions: () => localAgents?.refreshSkills('openfilm'),
+    onChange: () => { if (roster) broadcast('desktop:agents', roster.list()); },
+  });
+  // Services and Agents may both change the account. Read the shared state even when its settings page is closed.
+  setInterval(() => { void openfilmAgent.refresh(); }, 2000).unref();
+  agentCatalogs = createAgentCatalogs({
+    dataDir: DATA,
+    openSession: (id, onOptions) => localAgents.openProbeSession(id, onOptions),
+    onUpdated: (id) => localAgents.refreshSkills(id),
+    onChange: () => { if (roster) broadcast('desktop:agents', roster.list()); },
+  });
+  setInterval(() => agentCatalogs.refreshDue(), 30_000).unref();
+  roster = createRoster({
+    openfilm: openfilmAgent,
+    dataDir: DATA,
+    catalog: (id) => agentCatalogs.state(id),
+    updateState: (id) => agentUpdates?.state(id),
     localAgents: listAgents,
     localAgent,
     openSignIn: (id) => openAgentSignIn(id, { track: true }),
@@ -795,7 +951,7 @@ async function start() {
     resetAgent: (id) => { forgetAgentStatus(id); forgetAgentUsage(id); localAgents?.refreshSkills(id); },
     seal,
     unseal,
-    onChange: (list) => broadcast('desktop:agents', list),
+    onChange: (list) => { agentCatalogs.sync(list); agentUpdates?.sync(list); broadcast('desktop:agents', roster?.list() ?? list); },
     /* the program the person points at, for an agent not found where it is looked for */
     usePaths: setChosenPaths,
     pickProgram: async (_id, words) => {
@@ -805,6 +961,16 @@ async function start() {
     checkProgram: checkAgentProgram,
     diagnose: (id) => diagnoseAgent(id, { appVersion: app.getVersion() }),
   });
+  agentUpdates = createAgentUpdates({
+    dataDir: DATA, appVersion: app.getVersion(),
+    getAgents: () => roster.list(), readVersion: checkAgentProgram,
+    onChange: () => broadcast('desktop:agents', roster.list()),
+    onUpdated: async (id) => { await roster.recheck(id); agentCatalogs.refresh(id, { fresh: true }); },
+    isBusy: (id) => localAgents?.isAgentBusy(id) ?? false,
+    openCommand: openAgentUpdate, openLink: (url) => shell.openExternal(url),
+    openDesktop: () => updates?.manualCheck?.(menuLanguage),
+  });
+  agentUpdates.start();
   const agentHandle = (channel, fn) => ipcMain.handle(channel, (event, opts) => {
     if (!fromPage(event)) throw new Error('not the window\'s page');
     return fn(opts ?? {});
@@ -837,12 +1003,19 @@ async function start() {
   agentHandle('desktop:agents:cancel-sign-in', async ({ id }) => (await roster.cancelSignIn(String(id))) ?? { ok: true });
   agentHandle('desktop:agents:disconnect', async ({ id }) => (await roster.disconnect(String(id))) ?? { ok: true });
   agentHandle('desktop:agents:switch-account', ({ id }) => roster.switchAccount(String(id)));
-  /* what is left of Claude Code's and Codex's plan, on OpenFilm's sign-in (agent-usage.mjs); null when it can't say */
+  /* what is left of Claude Code's and Codex's plan, on Zfilm's sign-in (agent-usage.mjs); null when it can't say */
   agentHandle('desktop:agents:usage', ({ id, fresh }) => agentUsage(String(id), { fresh: fresh === true }));
   agentHandle('desktop:agents:locate', ({ id, words }) => roster.locate(String(id), words));
   agentHandle('desktop:agents:automatic', ({ id }) => roster.useAutomatic(String(id)));
   agentHandle('desktop:agents:install', ({ id }) => roster.install(String(id)));
   agentHandle('desktop:agents:diagnose', ({ id }) => roster.diagnose(String(id)));
+  agentHandle('desktop:agents:update-check', async ({ id }) => {
+    if (!id || id === 'openfilm' || id === 'byok') void updates?.check();
+    if (id) await agentUpdates.check(String(id), { fresh: true });
+    else await agentUpdates.checkAll({ fresh: true });
+    return roster.list();
+  });
+  agentHandle('desktop:agents:update', ({ id }) => agentUpdates.update(String(id)));
   agentHandle('desktop:agents:setup', async ({ id }) => {
     if (id !== 'claude') return { ok: false, error: 'No desktop setup for this agent.' };
     try { await shell.openExternal('claude://'); return { ok: true }; }
@@ -856,17 +1029,23 @@ async function start() {
   agentHandle('desktop:agents:report', appReport);
   /* the chat's "Copy diagnostic report" by a turn that failed: what Studio's report has (`openfilm doctor`, with the
      last week's problems) and the app's agents, on the clipboard (the chat's page may not be let write it) */
-  agentHandle('desktop:diagnostics:copy', async () => {
-    const [computer, own] = await Promise.all([
-      studioApi('/api/doctor').then((r) => String(r.text ?? ''), () => ''),
+  agentHandle('desktop:diagnostics:copy', async ({ offline }) => {
+    const [computer, own] = offline === true ? ['', ''] : await Promise.all([
+      studioApi('/api/doctor', 'GET', undefined, AbortSignal.timeout(3000)).then((r) => String(r.text ?? ''), () => ''),
       appReport().catch(() => ''),
     ]);
-    const text = [computer, own].filter(Boolean).join('\n\n────────\n\n');
-    if (!text) return { ok: false };
-    clipboard.writeText(text);
+    const report = [computer || offlineStudioReport(), own].filter(Boolean).join('\n\n────────\n\n');
+    clipboard.writeText(report);
     return { ok: true };
   });
   agentHandle('desktop:agents:shown', ({ id, shown }) => { roster.setShown(String(id), shown === true); return { ok: true }; });
+  agentHandle('desktop:agents:openfilm-models', ({ config }) => openfilmAgent.saveModels(config));
+  agentHandle('desktop:agents:model-menu', ({ id, config }) => agentCatalogs.saveModels(String(id), config));
+  agentHandle('desktop:agents:model-refresh', ({ id, model, fresh }) => {
+    if (id === 'openfilm') { void openfilmAgent.refresh({ fresh: fresh === true }); return { ok: true }; }
+    agentCatalogs.refresh(String(id), { fresh: fresh === true, model });
+    return { ok: true };
+  });
   agentHandle('desktop:agents:own-model', ({ config }) => roster.saveOwnModel(config));
   agentHandle('desktop:agents:own-model-remove', ({ id }) => { roster.removeOwnModel(String(id)); return { ok: true }; });
   ipcMain.handle('desktop:reveal', (event, path) => { if (fromPage(event) && typeof path === 'string' && path) shell.showItemInFolder(path); });
@@ -930,10 +1109,21 @@ async function start() {
     }).then(() => tellFfmpeg(true), (error) => { log(`ffmpeg did not download: ${error.message}\n`); tellFfmpeg({ state: 'failed', message: error.message }); })
       .finally(() => { ffmpegFetching = false; });
   }
+  studioRestartsOnExit = studioRestarts({
+    start: () => runStudio(env),
+    onRetry: (wait) => log(`${new Date().toISOString()} Retrying Studio in ${wait / 1000} s\n`),
+    onFailure: (error) => {
+      const what = `Studio restart failed: ${error.message ?? error}`;
+      log(`${new Date().toISOString()} ${what}\n`);
+      studioProblem('restart', what, error.code);
+    },
+  });
   try {
     await runStudio(env);
   } catch (error) {
+    if (quitting) return;
     log(`Studio did not start: ${error.stack ?? error}\n`);
+    studioProblem('startup', `Studio could not start: ${error.message ?? error}`, error.code);
     const v = makeView('failed');
     v.setVisible(true);
     void v.webContents.loadFile(here('./failed.html'), { query: { message: String(error.message ?? error) } });
@@ -945,10 +1135,16 @@ process.on('SIGINT', () => app.quit());
 process.on('SIGTERM', () => app.quit());
 app.on('activate', () => focusWindow());
 app.on('window-all-closed', () => app.quit());
+app.on('child-process-gone', (_event, details) => {
+  if (quitting || details.type !== 'Utility' || details.reason === 'clean-exit') return;
+  if (details.name !== 'Zfilm Studio' && details.serviceName !== 'Zfilm Studio') return;
+  const { reason, exitCode, systemErrorCode } = details;
+  studioProblem('Electron utility process', `Studio process lost (${reason}, ${exitCode}${systemErrorCode == null ? '' : `, system error ${systemErrorCode}`})`, String(exitCode));
+});
 app.on('before-quit', (event) => {
   quitAfterStudio(event, {
-    quitting, markQuitting: () => { quitting = true; }, studio,
+    quitting, markQuitting, studio,
     /* and the ones opened only to ask (signed in? its options?), which belong to no chat */
-    closeAgents: () => { void libraryImports?.close(); localAgents?.closeAll(); closeEverySession(); }, quit: () => app.quit(),
+    closeAgents: () => { agentUpdates?.stop(); agentCatalogs?.close(); localAgents?.closeAll(); closeEverySession(); }, quit: () => app.quit(),
   });
 });

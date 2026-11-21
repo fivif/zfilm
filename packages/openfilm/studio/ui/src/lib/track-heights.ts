@@ -15,15 +15,15 @@ export const TRACK_MAX_H = 160;
 /** Small, medium (the timeline's own) and large, for a picture track and a sound track. */
 export const TRACK_SIZES = {
   small: { visual: 36, audio: 30 },
-  medium: { visual: 64, audio: 44 },
+  medium: { visual: 52, audio: 42 },
   large: { visual: 96, audio: 80 },
 } as const;
 export type TrackSize = keyof typeof TRACK_SIZES;
 
 /** The main track's own height: taller than the others. */
-export const MAIN_TRACK_H = 76;
+export const MAIN_TRACK_H = 68;
 /** A track of the library's things laid over the film only (stickers, effects, filters): low, as a text track is. */
-export const OVERLAY_TRACK_H = 30;
+export const OVERLAY_TRACK_H = 28;
 
 /**
  * A track's own height (none set by the person): one of the film's videos and pictures tall (the main track the
@@ -32,6 +32,9 @@ export const OVERLAY_TRACK_H = 30;
 export function ownTrackHeight(track: { kind: TimelineLaneKind; main?: boolean; overlay?: boolean }): number {
   return track.overlay ? OVERLAY_TRACK_H : track.main ? MAIN_TRACK_H : TRACK_SIZES.medium[track.kind];
 }
+
+/** The main track is never lower than this: its cover stands beside it, and a frame of each clip must read. */
+export const MAIN_TRACK_MIN_H = 64;
 
 export function clampTrackHeight(h: number): number {
   return Math.round(Math.max(TRACK_MIN_H, Math.min(TRACK_MAX_H, h)));

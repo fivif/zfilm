@@ -74,6 +74,8 @@ test('I and O mark the ends of the range as editors do', () => {
   /* an in past the out starts again from there to the end */
   assert.deepEqual(markRange({ startMs: 2000, endMs: 5000 }, 'in', 6000, 10000), { startMs: 6000, endMs: 10000 });
   assert.equal(markRange(null, 'in', 10000, 10000), null);
+  assert.equal(markRange(null, 'in', 10001, 10000), null);
+  assert.deepEqual(markRange(null, 'out', 10001, 10000), { startMs: 0, endMs: 10000 });
 });
 
 test("the range's label says its ends, its length and its key", () => {
@@ -127,6 +129,14 @@ test("a file's reference says what it is, its length and size when known", () =>
     kind: 'file', path: 'assets/a.mp4', fileKind: 'video', duration: 4.2, w: 1920, h: 1080, image: { src: '/poster' },
   });
   assert.deepEqual(fileRef({ path: 'scenes/a.html', name: 'a', dir: '', size: 9, kind: 'mg', mtimeMs: 1 }), { kind: 'file', path: 'scenes/a.html', fileKind: 'page' });
+});
+
+test('a file a service made says how; one found on the web, or with nothing known, does not', () => {
+  const picture = { path: 'assets/image/fox.png', name: 'fox.png', dir: 'image', size: 9, kind: 'image' as const, mtimeMs: 1 };
+  assert.deepEqual(fileRef(picture, undefined, { words: 'a fox in snow', by: 'fal.ai', model: 'flux-2' }),
+    { kind: 'file', path: 'assets/image/fox.png', fileKind: 'image', made: { prompt: 'a fox in snow', by: 'fal.ai', model: 'flux-2' } });
+  assert.deepEqual(fileRef(picture, undefined, { words: 'foxes', by: 'Pexels', found: true }), { kind: 'file', path: 'assets/image/fox.png', fileKind: 'image' });
+  assert.deepEqual(fileRef(picture, undefined, { words: '', by: '' }), { kind: 'file', path: 'assets/image/fox.png', fileKind: 'image' });
 });
 
 const line = {

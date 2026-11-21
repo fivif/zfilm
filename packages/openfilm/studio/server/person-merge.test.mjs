@@ -135,6 +135,19 @@ test('ties go to the person: an undo back to an older value stands over a write 
   assert.deepEqual(out.kept, ['field\0t\0at']);
 });
 
+test('an agent that swaps a clip for another, then takes that one out, has it out (no edit of the person\'s at stake)', () => {
+  /* its write is as near to the version before the swap (wipe gone too) as to its own swap (glitch gone) */
+  const v0 = film([page('sweep', { at: 3 }), page('wipe', { at: 8 })], [page('title')]);
+  const v1 = mod(v0, (f) => { f.tracks[0].clips[1] = page('glitch', { at: 8 }); });
+  const out = mergeWrite({ ours: v1, write: mod(v1, (f) => { f.tracks[0].clips.pop(); }), versions: versionsOf(v0, v1), mine: [] });
+  assert.deepEqual(ids(out.value), [['sweep'], ['title']]);
+  assert.deepEqual(out.kept, []);
+  /* the person's own swap, on such a tie: their clip stays, and the writer is told */
+  const theirs = mergeWrite({ ours: v1, write: mod(v1, (f) => { f.tracks[0].clips.pop(); }), versions: versionsOf(v0, v1), mine: ['clip\0glitch'] });
+  assert.deepEqual(ids(theirs.value), [['sweep', 'glitch'], ['title']]);
+  assert.deepEqual(theirs.kept, ['clip\0glitch']);
+});
+
 test('notes the write agrees with: one naming a clip\'s unit, and one naming no clip (the stage), by the whole film', () => {
   const v0 = film([page('t', { at: 1 })]);
   const ours = mod(v0, (f) => { clip(f, 't').at = 4; f.stage = { w: 1080, h: 1920 }; });
@@ -388,6 +401,35 @@ test('the store: past the caps, the first version stays, and a copy older than a
     assert.equal(clip(out, 'c11').at, 130);
   } finally {
     personEdits.configure({ versions: 200 });
+    personEdits.forget(root);
+  }
+});
+
+test('the store: past the byte cap, eviction stops once only the first and last two versions remain', async () => {
+  const root = '/tmp/of-pe-byte-cap';
+  personEdits.configure({ bytes: 1 });
+  try {
+    const v0 = film([page('c0', { at: 1 }), page('c1', { at: 5 }), page('c2', { at: 9 })]);
+    const p = await project(root, v0);
+    p.edit([{ op: 'props', edits: [{ clip: 'c0', prop: 'box', value: { x: 123, y: 0, w: 640, h: 360 } }] }]);
+    await p.write(mod(p.now, (f) => { clip(f, 'c1').class = 'a1'; }));
+    p.edit([{ op: 'set', clip: 'c2', field: 'at', value: 20 }]);
+    await p.write(mod(p.now, (f) => { clip(f, 'c1').class = 'a2'; }));
+    const kept = personEdits.keptVersions(root);
+    assert.equal(kept.count, 3);
+    assert.ok(kept.hashes.includes(personEdits.versionHash(v0)));
+    const out = await p.write(mod(v0, (f) => { clip(f, 'c1').class = 'a3'; }));
+    assert.equal(clip(out, 'c0').box.x, 123);
+    assert.equal(clip(out, 'c2').at, 20);
+    assert.equal(clip(out, 'c1').class, 'a3');
+    /* tracked text files past the byte cap also stop evicting at three versions */
+    personEdits.filesWritten(root, { 'page.html': 'line 1\nline 2\n' }, { 'page.html': 'line 1\nperson\n' });
+    personEdits.filesWritten(root, { 'page.html': 'agent\nline 2\n' }, { 'page.html': 'agent\nperson 2\n' });
+    const merged = personEdits.mergeFileWrite(root, 'page.html', Buffer.from('line 1\nline 2\nagent tail\n'));
+    assert.ok(merged?.toString('utf8').includes('person 2'));
+    assert.ok(merged?.toString('utf8').includes('agent tail'));
+  } finally {
+    personEdits.configure({ bytes: 64 << 20 });
     personEdits.forget(root);
   }
 });
@@ -754,7 +796,8 @@ async function run(seed, { cap = 6, steps = 60 } = {}) {
         const [t, o, w2, g] = [FT, FO, FW, FR].map((m) => m.has(`there ${id}`));
         const facts = [...FO.keys(), ...FW.keys(), ...FT.keys()].filter((k) => k.endsWith(` ${id}`) && !k.startsWith('there '));
         const changedByPerson = t && o && facts.some((k) => !same(FO.get(k), FT.get(k)) && mine.has(k));
-        if (!t && o) { assert.ok(g, `${where}: ${id}, added by the person, is gone`); continue; }
+        /* added since the writer's copy: it stays; another write's, on a tie, gives way to this write, as a field does */
+        if (!t && o) { assert.ok(g || (tie && !mine.has(`there ${id}`)), `${where}: ${id}, added ${mine.has(`there ${id}`) ? 'by the person' : 'by a write, with no tie'}, is gone`); continue; }
         if (t && !o) {
           /* removed: by the person, it stays so; by a write, the writer's changes to it bring it back */
           const wrote = w2 && facts.some((k) => !same(FW.get(k), FT.get(k)));

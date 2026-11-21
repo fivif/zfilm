@@ -3,7 +3,7 @@
  * Which provider serves each verb of `openfilm get`, and the API of Studio's Settings → Services.
  *
  * A person's own key for ElevenLabs, Inworld, Cartesia, OpenAI, Google (the Gemini API), fal.ai, OpenRouter, Groq, Microsoft Azure (Azure AI Speech), Pexels,
- * Pixabay, Brave Search or Tavily pays that service directly for what it can do. Each makes a kind of media with the model the person chose for
+ * Pixabay, Brave Search, Tavily or Zfilm pays that service directly for what it can do. Each makes a kind of media with the model the person chose for
  * it (the provider's first unless they did). Keenable also works with no key: connected with one click, a key lifts its limits.
  * Who serves a verb: `--via <provider>` on the command, else the person's choice for that kind of media in Settings (`use`),
  * while it can; else nothing does. Every provider is treated alike: a kind with no choice goes to the first provider,
@@ -16,6 +16,8 @@ import { HttpError, json, readJson } from '../http.mjs';
 import { changeSettings, cleanKey, envKey, kindOf, modelFor, providerKey, readSettings } from '../keys.mjs';
 import { shownService, withService } from '../custom-services.mjs';
 import { cancelSignIn, signInState, signOut, startSignIn } from '../sign-in.mjs';
+import { desktopAccount, lastAccountConnection } from '../account.mjs';
+import { accountProfile, lastAccountProfile } from '../account-profile.mjs';
 import elevenlabs from './elevenlabs.mjs';
 import inworld from './inworld.mjs';
 import cartesia from './cartesia.mjs';
@@ -23,6 +25,7 @@ import openai from './openai.mjs';
 import google from './google.mjs';
 import fal from './fal.mjs';
 import openrouter from './openrouter.mjs';
+import volcengine from './volcengine.mjs';
 import pexels from './pexels.mjs';
 import pixabay from './pixabay.mjs';
 import brave from './brave.mjs';
@@ -32,6 +35,7 @@ import azure from './azure.mjs';
 import doubao from './doubao.mjs';
 import mimo from './mimo.mjs';
 import keenable from './keenable.mjs';
+import openfilm from './openfilm.mjs';
 import local from './local.mjs';
 import { addedProblems, addedProviders } from './added.mjs';
 
@@ -42,12 +46,13 @@ import { addedProblems, addedProviders } from './added.mjs';
  */
 
 /** The providers paid with the person's own key, and Local services, which takes none. */
-const BUILT_IN = [elevenlabs, inworld, cartesia, openai, google, fal, openrouter, pexels, pixabay, brave, tavily, groq, azure, doubao, mimo, keenable, local];
+const BUILT_IN = [elevenlabs, inworld, cartesia, openai, google, fal, openrouter, volcengine, pexels, pixabay, brave, tavily, groq, azure, doubao, mimo, keenable, openfilm, local];
 /** Those, then the ones the person added (added.mjs), as last read (changed in place). */
 const OWN = [...BUILT_IN];
 
 /** The kinds of media the person chooses a provider and model for (Settings → Services). */
 const USE_VERBS = /** @type {Verb[]} */ (['tts', 'music', 'sfx', 'asr', 'cutout', 'image', 'image-search', 'video-search', 'video', 'translate', 'web-search']);
+export const isAudioGeneration = (/** @type {string} */ verb) => verb === 'music' || verb === 'sfx';
 
 export const listProviders = () => OWN;
 
@@ -72,13 +77,13 @@ async function named(id, verb, settings, strict) {
   const fail = (/** @type {string} */ why) => { if (strict) throw new Error(why); return null; };
   if (!provider) return fail(`There is no provider "${id}": use ${OWN.map((p) => p.id).join(', ')}.`);
   if (provider.ready && !provider.verbs.includes(verb)) {
-    return fail(`No local model for ${verb} is installed and on: the person installs one in Studio (the gear at the top left opens Settings → Services → Local services).`);
+    return fail(`No local model for ${verb} is installed and on: the person installs one in Studio (the Zfilm logo at the top left opens Settings → Services → Local services).`);
   }
   if (!provider.verbs.includes(verb)) return fail(`${provider.name} does not do ${verb}.`);
   if (!providerKey(provider, settings)) {
     return fail(provider.keyless
-      ? `${provider.name} is not connected: connect it in Studio (the gear at the top left opens Settings → Services), no key needed, or set ${provider.env}.`
-      : `There is no ${provider.name} key: add one in Studio (the gear at the top left opens Settings → Services) or set ${provider.env}.`);
+      ? `${provider.name} is not connected: connect it in Studio (the Zfilm logo at the top left opens Settings → Services), no key needed, or set ${provider.env}.`
+      : `There is no ${provider.name} key: add one in Studio (the Zfilm logo at the top left opens Settings → Services) or set ${provider.env}.`);
   }
   return provider;
 }
@@ -91,7 +96,7 @@ async function named(id, verb, settings, strict) {
 function fill(s) {
   const connected = OWN.filter((p) => providerKey(p, s)).sort((a, b) => a.name.localeCompare(b.name));
   for (const verb of USE_VERBS) {
-    if (s.use[verb]) continue;
+    if (Object.hasOwn(s.use, verb)) continue;
     const next = connected.find((p) => /** @type {readonly string[]} */ (p.verbs).includes(verb));
     if (next) s.use[verb] = next.id;
   }
@@ -118,13 +123,14 @@ export async function localModelsChanged() {
 /**
  * Who serves `verb`: `via` (a provider id from `--via`), else the person's choice while it can. null:
  * nothing is chosen, or what is chosen cannot serve now.
- * @param {Verb} verb @param {{ via?: string | null, settings?: ProviderSettings }} [options]
+ * @param {Verb} verb @param {{ via?: string | null, settings?: ProviderSettings, recoverOnly?: boolean }} [options]
  * @returns {Promise<Provider | null>}
  */
-export async function chooseProvider(verb, { via, settings } = {}) {
+export async function chooseProvider(verb, { via, settings, recoverOnly = false } = {}) {
   const saved = settings ?? await providerSettings();
   /* every provider that speaks also lists its voices; one that searches the web reads its pages */
   const kind = /** @type {Verb} */ (kindOf(verb));
+  if (isAudioGeneration(kind) && saved.use[kind] === '' && !recoverOnly) return null;
   /* what the one it would be offers now */
   await OWN.find((p) => p.id === (via || saved.use[kind]))?.refresh?.();
   if (via) return named(via, kind, saved, true);
@@ -154,31 +160,63 @@ export function shownChoices(settings) {
   };
 }
 
+const INVALID_ACCOUNT = 'This Zfilm connection is no longer valid. Connect again.';
+
+/** An account card can render from the local credential and cached details while Services is still loading. */
+async function localAccount() {
+  const signingIn = signInState();
+  const settings = await readSettings(undefined, { strict: true });
+  const key = providerKey(openfilm, settings);
+  const invalid = lastAccountConnection(key?.key)?.status === 401;
+  const profile = !invalid && key?.source === 'file' ? lastAccountProfile(key.key) : null;
+  return {
+    account: {
+      source: invalid ? null : key?.source ?? null, env: key?.env ?? openfilm.env,
+      account: key?.source === 'file' ? settings.accounts.openfilm ?? null : null,
+      keysUrl: openfilm.keysUrl,
+      ...(invalid ? { connectionError: INVALID_ACCOUNT } : {}),
+      ...(profile ? { profile } : {}),
+    },
+    signingIn,
+  };
+}
+
 /** What Settings → Services shows. Never a key: where it comes from and its last four characters. */
 async function state() {
-  await freshProviders();
-  const settings = await readSettings();
+  const signingIn = signInState();
+  const settings = await readSettings(undefined, { strict: true });
+  const signed = providerKey(openfilm, settings);
+  const [account, profile] = await Promise.all([
+    desktopAccount({ settings }),
+    signed?.source === 'file' && lastAccountConnection(signed.key)?.status !== 401 ? accountProfile(signed.key) : null,
+    freshProviders(),
+  ]);
   return {
     providers: OWN.map((p) => {
       const key = providerKey(p, settings);
+      const invalid = p.id === 'openfilm' && account.connection?.status === 401;
       /* `envKey`: the environment has one (connected or not), so connecting can use it */
       const inEnv = envKey(p);
       return {
         id: p.id, name: p.name, verbs: p.verbs, models: p.models ?? {}, keysUrl: p.keysUrl, pricingUrl: p.pricingUrl, env: key?.env ?? inEnv?.env ?? p.env, envKey: Boolean(inEnv),
         /* `keyless`: it connects without a key; connected so, it has no last four */
-        ...(p.keyless ? { keyless: true } : {}), source: key?.source ?? null, last4: key?.key ? key.key.slice(-4) : null,
+        ...(p.keyless ? { keyless: true } : {}),
+        /* `noKey`: it takes no key at all (a local service): connected and disconnected with one click */
+        ...(p.ready ? { noKey: true } : {}), source: invalid ? null : key?.source ?? null, last4: key?.key ? key.key.slice(-4) : null,
+        ...(invalid ? { connectionError: INVALID_ACCOUNT } : {}),
         /* connected by signing in (sign-in.mjs), and as whom */
         signIn: Boolean(p.signIn), account: key?.source === 'file' ? settings.accounts[p.id] ?? null : null,
+        ...(p.id === 'openfilm' && !invalid && profile ? { profile } : {}),
         /* one the person added (added.mjs), not built in */
         ...(p.added ? { added: true } : {}),
       };
     }),
     /* the added services left out, and why */
     ...(addedProblems.size ? { addedProblems: [...addedProblems].map(([folder, problem]) => ({ folder, problem })) } : {}),
-    signingIn: signInState(),
+    signingIn,
     ...shownChoices(settings),
     custom: settings.custom.map(shownService),
-    /* no hosted search engine: the library's own search settings are elsewhere */
+    /* the library searched by meaning at Zfilm's service, or by its words alone */
     librarySearch: settings.libraryOff ? null : 'openfilm',
   };
 }
@@ -186,7 +224,7 @@ async function state() {
 /**
  * Studio's `/api/providers/*` (the editor page, with the launch key like the rest of the API). Each answers the state:
  *   GET    /api/providers           → { providers: [{ id, name, verbs, models: { verb: [{ id, name }] }, keysUrl, pricingUrl, env,
- *                                       keyless?, source: 'file' | 'env' | null, last4 }],
+ *                                       keyless?, noKey?, source: 'file' | 'env' | null, last4, account, profile? (Zfilm: { name, avatar }) }],
  *                                       use: { verb: provider id | null },
  *                                       model: { verb: model id | null },
  *                                       librarySearch: 'openfilm' | null }
@@ -197,8 +235,8 @@ async function state() {
  *                                                         not used (until it is connected again)
  *   PUT    /api/providers/use       { verb, provider, model? }  who serves that kind of media (an id, or null: none),
  *                                       and with which of its models (its first when none is given)
- *   PUT    /api/providers/library-search { on }  the library searched by its words alone (there is no hosted search
- *                                       engine): the choice is kept for the CLI's own library search
+ *   PUT    /api/providers/library-search { on }  the library searched by meaning at Zfilm's service (on, the
+ *                                       default) or by its words alone
  *   POST   /api/providers/:id/billing → {}, the provider's own page for its balance opened in the person's browser
  *   POST   /api/providers/:id/sign-in         a provider with `signIn`: its website opened in the person's browser to
  *                                       sign in (sign-in.mjs); the state's `signingIn` says who is waiting, and why
@@ -216,6 +254,7 @@ async function state() {
  */
 export async function providersRoute(req, res, parts, { openBrowser }) {
   if (!parts.length && req.method === 'GET') return json(res, 200, await state());
+  if (parts.length === 2 && parts[0] === 'openfilm' && parts[1] === 'account' && req.method === 'GET') return json(res, 200, await localAccount());
   if (parts[0] === 'custom' && parts.length <= 2) {
     const id = parts[1] ?? null;
     if (id === null ? req.method !== 'POST' : req.method !== 'PUT' && req.method !== 'DELETE') throw new HttpError(405, 'POST to add, PUT or DELETE one');
@@ -271,9 +310,10 @@ export async function providersRoute(req, res, parts, { openBrowser }) {
         return json(res, 200, await state());
       }
       let key;
-      try { key = provider.keyless && body.key === '' ? '' : cleanKey(body.key); if (key) provider.checkKey?.(key); } catch (e) { throw new HttpError(400, /** @type {Error} */ (e).message); }
+      try { key = (provider.keyless || provider.ready) && body.key === '' ? '' : cleanKey(body.key); if (key) provider.checkKey?.(key); } catch (e) { throw new HttpError(400, /** @type {Error} */ (e).message); }
       await provider.refresh?.();
-      await changeSettings((s) => { s.keys[provider.id] = key; on(s); fill(s); });
+      /* one that takes no key at all (`ready`) is connected again by being on, with nothing kept */
+      await changeSettings((s) => { if (!provider.ready) s.keys[provider.id] = key; on(s); fill(s); });
       return json(res, 200, await state());
     }
     if (req.method === 'DELETE') {
@@ -282,9 +322,13 @@ export async function providersRoute(req, res, parts, { openBrowser }) {
       await changeSettings((s) => {
         delete s.keys[provider.id];
         delete s.accounts[provider.id];
-        if (envKey(provider) && !s.off.includes(provider.id)) s.off.push(provider.id);
-        /* what a provider that can no longer be used made goes to what else makes it */
-        if (!providerKey(provider, s)) for (const [verb, id] of Object.entries(s.use)) if (id === provider.id) delete s.use[verb];
+        /* one connected without a kept key (the environment's, or none at all) stays off until connected again */
+        if ((envKey(provider) || provider.ready) && !s.off.includes(provider.id)) s.off.push(provider.id);
+        /* Disconnecting the selected audio generator stops paid generation until another is chosen. */
+        if (!providerKey(provider, s)) for (const [verb, id] of Object.entries(s.use)) {
+          if (id !== provider.id) continue;
+          if (isAudioGeneration(verb)) s.use[verb] = ''; else delete s.use[verb];
+        }
         fill(s);
       });
       return json(res, 200, await state());
@@ -292,7 +336,7 @@ export async function providersRoute(req, res, parts, { openBrowser }) {
   }
   if (parts.length === 1 && parts[0] === 'library-search' && req.method === 'PUT') {
     const { on } = /** @type {{ on?: unknown }} */ (await readJson(req));
-    if (typeof on !== 'boolean') throw new HttpError(400, 'on: true (the library is searched by meaning, no hosted engine) or false (by its words)');
+    if (typeof on !== 'boolean') throw new HttpError(400, 'on: true (Zfilm searches it by meaning) or false (by its words)');
     await changeSettings((s) => { s.libraryOff = !on; });
     return json(res, 200, await state());
   }
@@ -308,7 +352,7 @@ export async function providersRoute(req, res, parts, { openBrowser }) {
     const named = model == null || model === '' ? null : models.find((m) => m.id === model);
     if (model != null && model !== '' && !named) throw new HttpError(400, `${id ?? 'no provider'} has no model ${String(model)} for ${kind}`);
     await changeSettings((s) => {
-      if (id === null) delete s.use[kind]; else s.use[kind] = id;
+      if (id !== null || isAudioGeneration(kind)) s.use[kind] = id ?? ''; else delete s.use[kind];
       if (named && named !== models[0]) s.model[kind] = named.id; else delete s.model[kind];
     });
     return json(res, 200, await state());

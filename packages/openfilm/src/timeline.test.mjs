@@ -88,6 +88,108 @@ test('a film in a film: its picture is a page\'s, and its sound is heard where t
   }
 });
 
+test('an element of a page moves by the film\'s keyframes an override\'s animation names, on the page\'s time', { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-element-motion-'));
+  writeFileSync(join(dir, 'title.html'), page('title', 4));
+  writeFileSync(join(dir, 'film.html'), filmHtml({
+    stage: { w: 320, h: 180 },
+    tracks: [{ clips: [{ id: 't', src: 'title.html', at: 1, overrides: [{ at: 'p', style: { animation: 't--e1--translate 2s linear both' } }] }] }],
+    keyframes: { 't--e1--translate': '0% { translate: 0px 0px } 100% { translate: 100px 0px }' },
+  }));
+  const s = await open(dir);
+  const moved = () => s.film.page.evaluate(() => {
+    const p = document.querySelector('#t').contentDocument.querySelector('p');
+    return getComputedStyle(p).translate;
+  });
+  try {
+    /* 1.5 s into the film is 0.5 s into the page: a quarter of the way */
+    await s.film.seek(1.5);
+    assert.equal(await moved(), '25px');
+    await s.film.seek(3);
+    assert.equal(await moved(), '100px');
+  } finally {
+    await s.close();
+  }
+});
+
+test('an element\'s words animate part by part: each word its turn, the film\'s keyframes, on the page\'s time', { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-split-'));
+  writeFileSync(join(dir, 'title.html'), page('hello there', 4));
+  writeFileSync(join(dir, 'film.html'), filmHtml({
+    stage: { w: 320, h: 180 },
+    tracks: [{ clips: [{ id: 't', src: 'title.html', overrides: [{ at: 'p', split: { by: 'word', animation: 'motion-text-fade 1s linear both', stagger: 1 } }] }] }],
+    keyframes: { 'motion-text-fade': '0% { opacity: 0 } 100% { opacity: 1 }' },
+  }));
+  const s = await open(dir);
+  const parts = () => s.film.page.evaluate(() => [...document.querySelector('#t').contentDocument.querySelectorAll('p [data-film-part]')]
+    .map((el) => [el.textContent, Number(getComputedStyle(el).opacity).toFixed(2)]));
+  try {
+    await s.film.seek(1.5);
+    assert.deepEqual(await parts(), [['hello', '1.00'], ['there', '0.50']]);
+    await s.film.seek(0.5);
+    assert.deepEqual(await parts(), [['hello', '0.50'], ['there', '0.00']]);
+  } finally {
+    await s.close();
+  }
+});
+
+test('a picture in 3D turns about its middle under the film\'s camera; a flat film has neither', { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-3d-'));
+  writeFileSync(join(dir, 'title.html'), page('title', 4));
+  writeFileSync(join(dir, 'film.html'), filmHtml({
+    stage: { w: 320, h: 180 },
+    tracks: [
+      { clips: [{ id: 't', src: 'title.html', style: 'animation: t--ry 2s linear both' }] },
+      { clips: [{ id: 'flat', src: 'title.html' }] },
+    ],
+    keyframes: { 't--ry': '0% { --fx-ry: 0deg } 100% { --fx-ry: 60deg }' },
+  }));
+  const s = await open(dir);
+  const look = () => s.film.page.evaluate(() => ({
+    turned: getComputedStyle(document.querySelector('#t')).transform,
+    flat: document.querySelector('#flat').style.transform,
+    camera: document.body.style.perspective,
+  }));
+  try {
+    await s.film.seek(1);
+    const at = await look();
+    assert.match(at.turned, /^matrix3d\(/, '30° about Y: a 3D matrix');
+    /* cos 30° on the X axis's first term */
+    assert.ok(Math.abs(Number(at.turned.slice(9).split(',')[0]) - Math.cos(Math.PI / 6)) < 0.01, at.turned);
+    assert.doesNotMatch(at.flat, /translateZ/, 'a flat clip is placed flat');
+    assert.equal(at.camera, '444.44px');
+  } finally {
+    await s.close();
+  }
+});
+
+test('a picture turns and scales about its anchor point, from its box\'s middle', { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-anchor-'));
+  writeFileSync(join(dir, 'chip.html'), page('chip', 2).replace('width:320,height:180', 'width:80,height:40'));
+  /* its box 160 × 80 at (20, 30), its anchor at the box's top left: halved toward that corner, then also turned 90° */
+  const anchored = '--fx-ax: -80px; --fx-ay: -40px; animation: half 2s linear both';
+  writeFileSync(join(dir, 'film.html'), filmHtml({
+    stage: { w: 320, h: 180 },
+    tracks: [
+      { clips: [{ id: 'a', src: 'chip.html', box: { x: 20, y: 30, w: 160 }, style: anchored }] },
+      { clips: [{ id: 'b', src: 'chip.html', box: { x: 20, y: 30, w: 160, r: 90 }, style: anchored }] },
+      { clips: [{ id: 'c', src: 'chip.html', box: { x: 20, y: 30, w: 160 }, style: 'animation: half 2s linear both' }] },
+    ],
+    keyframes: { half: '0%, 100% { scale: 0.5 }' },
+  }));
+  const s = await open(dir);
+  try {
+    await s.film.seek(1);
+    const seen = await s.film.page.evaluate(() => [...document.querySelectorAll('iframe')].map((el) => {
+      const r = el.getBoundingClientRect();
+      return [r.left, r.top, r.width, r.height].map((n) => Math.round(n));
+    }));
+    assert.deepEqual(seen, [[20, 30, 80, 40], [-20, 30, 40, 80], [60, 50, 80, 40]]);
+  } finally {
+    await s.close();
+  }
+});
+
 /** `seconds` of silence as a WAV (8 kHz, mono, 16 bit): a sound file the browser reads without a codec. */
 function silence(seconds) {
   const data = Math.round(8000 * seconds) * 2;
@@ -261,6 +363,29 @@ test('a film that cannot load says why when its host awaits `ready`, and is no u
     assert.deepEqual(uncaught, []);
     const why = await page.evaluate(() => window.film.ready.then(() => null, (e) => e.message));
     assert.match(why, /^clip "card" \(card\.html\): this page has no duration/);
+    assert.deepEqual(uncaught, []);
+  } finally {
+    await browser.close();
+    await site.close();
+  }
+});
+
+test('a film whose read of its own file is cut (a load Studio drops) reads it again, and is no uncaught error', { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-cut-read-'));
+  writeFileSync(join(dir, 'card.html'), page('card', 2));
+  writeFileSync(join(dir, 'film.html'), filmHtml({ stage: { w: 320, h: 180 }, tracks: [{ clips: [{ src: 'card.html', id: 'card' }] }] }));
+  const site = await serve(dir);
+  const browser = await launch();
+  try {
+    const tab = await browser.newPage();
+    const uncaught = [];
+    tab.on('pageerror', (e) => uncaught.push(e.message));
+    let cut = 0;
+    await tab.route(/film\.html\?film-host=0$/, (route) => (cut++ ? route.continue() : route.abort()));
+    await tab.goto(`${site.url}/film.html`);
+    await tab.waitForFunction(() => Boolean(window.film));
+    assert.equal(await tab.evaluate(() => window.film.ready.then(() => window.film.duration)), 2);
+    assert.equal(cut, 2, 'read again once');
     assert.deepEqual(uncaught, []);
   } finally {
     await browser.close();
@@ -1240,9 +1365,13 @@ test('playing through a stretch rendered for the preview, its render shows, the 
         const render = [...document.querySelectorAll('body > video')].at(-1);
         log.push({ t, drew: page.drawn.length > before, render: render.style.visibility });
       }
-      await window.__filmEditor.watch(1.5);
       const render = [...document.querySelectorAll('body > video')].at(-1);
-      return { log, still: { drew: page.drawn.at(-1), render: render.style.visibility, paused: render.paused } };
+      const stale = await window.__filmEditor.showCachedSeek(1.25, () => false);
+      const cached = await window.__filmEditor.showCachedSeek(1.5, () => true);
+      const beforeLive = { cached, render: render.style.visibility, paused: render.paused };
+      const media = { time: render.currentTime, ready: render.readyState, seeking: render.seeking, error: render.error?.message, src: render.currentSrc, network: render.networkState };
+      await window.__filmEditor.watch(1.5);
+      return { log, stale, beforeLive, media, still: { drew: page.drawn.at(-1), render: render.style.visibility, paused: render.paused } };
     });
     const inside = seen.log.filter((f) => f.t >= 1 && f.t < 1.9);
     assert.ok(inside.length > 10 && inside.every((f) => f.render === 'visible'), `inside the render: ${JSON.stringify(inside.slice(0, 3))}`);
@@ -1252,6 +1381,8 @@ test('playing through a stretch rendered for the preview, its render shows, the 
     assert.ok(seen.log.filter((f) => f.t < 0.4).every((f) => f.drew && f.render === 'hidden'), 'before it: the film itself');
     assert.ok(seen.log.filter((f) => f.t >= 2.1 && f.t < 2.45).every((f) => f.drew), 'just before it ends: the clips are drawn again under it');
     assert.ok(seen.log.filter((f) => f.t >= 2.55).every((f) => f.drew && f.render === 'hidden'), 'after it: the film itself');
+    assert.equal(seen.stale, false, 'a superseded seek cannot show a cached picture');
+    assert.deepEqual(seen.beforeLive, { cached: true, render: 'visible', paused: true }, `a decoded cached frame is shown before the live draw ${JSON.stringify(seen.media)}`);
     assert.deepEqual(seen.still, { drew: 1.5, render: 'hidden', paused: true }, 'stopped: the film itself, exact');
   } finally {
     await s.close();

@@ -11,14 +11,37 @@
  * the window, agents' `openfilm` commands and run.json are the app's from the start.
  */
 import { utilityProcess } from 'electron';
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { nodeProxyVariables } from './environment.mjs';
 
 const ENTRY = fileURLToPath(new URL('./studio-process.mjs', import.meta.url));
 const QUIT_WAIT_MS = 10_000;
 const START_WAIT_MS = 30_000;
 const EXPORT_RETRY_MS = 5_000;
+
+/** Credentials cross only the private utility-process channel, never Studio's HTTP API or renderer IPC. */
+function readAccount(child, { fresh = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const id = randomUUID();
+    const finish = (error, account) => {
+      clearTimeout(timer);
+      child.removeListener('message', receive);
+      child.removeListener('exit', exited);
+      if (error) reject(error); else resolve(account);
+    };
+    const receive = (message) => {
+      if (message?.type === 'account' && message.id === id) finish(message.error ? new Error(message.error) : null, message.account);
+    };
+    const exited = () => finish(new Error('Studio stopped while reading the Zfilm account.'));
+    const timer = setTimeout(() => finish(new Error('Studio did not answer about the Zfilm account.')), 8000);
+    child.on('message', receive);
+    child.once('exit', exited);
+    child.postMessage({ type: 'account:read', id, fresh });
+  });
+}
 
 /** The Studio `openfilm open` started, if it answers. */
 async function advertised(home) {
@@ -59,33 +82,47 @@ async function takeOver(home, log) {
 }
 
 /**
- * @param {{ home: string, port: number, env: Record<string, string>, onOpen: (url: string) => void,
- *           onBrowser: (state: { state: string, message?: string }) => void, onAsk?: AskHandler, log: (line: string) => void }} options
- * @returns {Promise<{ origin: string, filmOrigin: string, key: string, child: Electron.UtilityProcess }>}
+ * `secrets`: Studio's own key and its service keys' vault (studio-secrets.mjs), told to it when it asks, over this
+ * private channel only; none: it keeps keys plain, as `npx openfilm` does.
+ * @param {{ home: string, port: number, env: Record<string, string>, secrets?: { key: string, vault: string } | null, onOpen: (url: string) => void,
+ *           onBrowser: (state: { state: string, message?: string }) => void, onAsk?: AskHandler,
+ *           onRelease?: (folder: string) => Promise<void> | void, log: (line: string) => void }} options
+ * @returns {Promise<{ origin: string, filmOrigin: string, key: string, child: Electron.UtilityProcess, readAccount: (options?: { fresh?: boolean }) => Promise<any> }>}
  */
-function fork({ port, env, onOpen, onBrowser, onAsk, log }) {
+function fork({ port, env, secrets = null, onOpen, onBrowser, onAsk, onRelease, log }) {
   return new Promise((resolve, reject) => {
     const child = utilityProcess.fork(ENTRY, [], {
-      serviceName: 'OpenFilm Studio',
-      env: { ...env, OPENFILM_STUDIO_PORT: String(port) },
+      serviceName: 'Zfilm Studio',
+      env: { ...env, ...nodeProxyVariables(env), OPENFILM_STUDIO_PORT: String(port) },
       stdio: 'pipe',
     });
     child.stdout?.on('data', (d) => log(String(d)));
     child.stderr?.on('data', (d) => log(String(d)));
-    const timer = setTimeout(() => { child.kill(); reject(new Error('Studio did not start in time')); }, START_WAIT_MS);
     let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      child.kill();
+      reject(new Error('Studio did not start in time'));
+    }, START_WAIT_MS);
+    /* Electron follows a fatal error with exit. The full V8 report can contain the environment. */
+    child.on('error', (type, location) => log(`${new Date().toISOString()} Studio ${type} at ${location}\n`));
     child.on('message', (message) => {
       if (message?.type === 'ready' && !settled) {
         settled = true;
         clearTimeout(timer);
-        resolve({ origin: message.origin, filmOrigin: message.filmOrigin, key: message.key, child });
+        resolve({ origin: message.origin, filmOrigin: message.filmOrigin, key: message.key, child, readAccount: (options) => readAccount(child, options) });
       } else if (message?.type === 'failed' && !settled) {
         settled = true;
         clearTimeout(timer);
         reject(Object.assign(new Error(message.message), { code: message.code }));
-      } else if (message?.type === 'open') onOpen(message.url);
+      } else if (message?.type === 'secrets:read') child.postMessage({ type: 'secrets', ...(secrets ?? {}) });
+      else if (message?.type === 'open') onOpen(message.url);
       else if (message?.type === 'browser' || message?.type === 'ffmpeg') onBrowser(message);
       else if (message?.type === 'ask' || message?.type === 'ask-cancel') onAsk?.(message, (answer) => child.postMessage(answer));
+      /* a folder about to be renamed: what the app runs in it stops first (studio-process.mjs release) */
+      else if (message?.type === 'release') {
+        void Promise.resolve(onRelease?.(String(message.folder ?? ''))).catch(() => {}).then(() => child.postMessage({ type: 'released', id: message.id }));
+      }
     });
     child.once('exit', (code) => {
       if (settled) return;
@@ -98,18 +135,20 @@ function fork({ port, env, onOpen, onBrowser, onAsk, log }) {
 
 /**
  * A question Studio asks the person's agent (`{ type: 'ask', id, text }`, or `{ type: 'ask-cancel', id }` to stop
- * it), and how its answer goes back: `{ type: 'answer', id, text }` or `{ type: 'answer', id, error, code? }`.
+ * it), and how its answer goes back: `{ type: 'answer', id, text }` or `{ type: 'answer', id, error, code? }`; asked
+ * with `stream`, each piece first as it comes, `{ type: 'answer-part', id, delta }`.
  * @typedef {{ agent: string, options: Record<string, string | number | boolean> }} WritingModel
  * @typedef {{ mimeType: string, data: string }} WritingImage
- * @typedef {(message: { type: 'ask' | 'ask-cancel', id: string, text?: string, model?: WritingModel, images?: WritingImage[] }, reply: (answer: Record<string, unknown>) => void) => void} AskHandler
+ * @typedef {(message: { type: 'ask' | 'ask-cancel', id: string, text?: string, model?: WritingModel, images?: WritingImage[], stream?: boolean }, reply: (answer: Record<string, unknown>) => void) => void} AskHandler
  */
 
 /**
  * Start the window's Studio. `onExit` hears when it stops after it had started (a crash): `restart()` starts it again.
- * `onAsk` answers Studio's questions for the person's agent (studio-process.mjs askAgent).
- * @param {{ home: string, port: number, env: Record<string, string>, onOpen: (url: string) => void,
+ * `onAsk` answers Studio's questions for the person's agent (studio-process.mjs askAgent). `onRelease` stops what the
+ * app runs in a project folder about to be renamed (studio-process.mjs release).
+ * @param {{ home: string, port: number, env: Record<string, string>, secrets?: { key: string, vault: string } | null, onOpen: (url: string) => void,
  *           onBrowser: (state: { state: string, message?: string }) => void, onExit: (code: number) => void,
- *           onAsk?: AskHandler, log: (line: string) => void }} options
+ *           onAsk?: AskHandler, onRelease?: (folder: string) => Promise<void> | void, log: (line: string) => void }} options
  */
 export async function startWindowStudio(options) {
   await takeOver(options.home, options.log);

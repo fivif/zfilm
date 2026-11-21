@@ -16,11 +16,15 @@ type Framing = { frame?: FilmFrameId; fill?: FilmFrameFill; burnSubtitles?: bool
  */
 export type NleAlpha = 'auto' | 'png' | 'prores' | 'prores4444';
 
-export type ExportRequest = { range?: [number, number]; ranges?: [number, number][]; label?: string; name?: string } & (
-  | (Framing & { kind: 'video'; codec: ExportVideoCodec; shortEdge?: number; fps: number; quality: ExportQuality; audio: boolean;
-    clip?: string; scale?: number; preset?: string; sidecar?: 'srt' | 'vtt'; loudness?: number })
+export type ExportRequest = { range?: [number, number]; ranges?: [number, number][]; label?: string; name?: string; workers?: number } & (
+  /* `bitrate`: the picture's bits a second, held on the processor, in place of `quality` (a delivery's rate or size);
+     `maxrate`: its peaks (a size's are held to its bitrate) */
+  | (Framing & { kind: 'video'; codec: ExportVideoCodec; shortEdge?: number; fps: number; quality?: ExportQuality; bitrate?: number; maxrate?: number; audio: boolean;
+    clip?: string; scale?: number; preset?: string; sidecar?: 'srt' | 'vtt'; loudness?: number;
+    /** a cover of the film (`covers/<name>`) drawn as the first frame (h264 and hevc) */
+    cover?: string })
   | (Framing & { kind: 'gif'; width: number; fps: number })
-  | { kind: 'audio'; format: 'wav' | 'm4a' | 'mp3'; mix: boolean; stems: boolean }
+  | { kind: 'audio'; format: 'wav' | 'm4a' | 'mp3'; mix: boolean; stems: boolean; loudness?: number }
   | (Framing & { kind: 'stills'; as?: 'files' | 'zip'; format: 'png' | 'jpg'; shortEdge: number; at?: number[] })
   | (Framing & { kind: 'poster'; format: 'png' | 'jpg'; shortEdge: number; at?: number })
   | { kind: 'subtitles'; format: 'srt' | 'vtt' | 'txt' }
@@ -41,6 +45,7 @@ export const PROJECT_PARTS: readonly ProjectPart[] = ['history', 'chat', 'logs']
 export type ProjectSizes = { work: number } & Record<ProjectPart, number | null>;
 
 export type ExportJobStatus = 'waiting' | 'running' | 'done' | 'failed' | 'cancelled';
+export type ExportPhase = 'preparing' | 'audio' | 'loudness' | 'rendering' | 'encoding' | 'retrying' | 'muxing' | 'cover' | 'subtitles' | 'copying' | 'packaging' | 'saving' | 'checking' | 'finishing';
 
 export interface ExportJob {
   id: string;
@@ -51,7 +56,12 @@ export interface ExportJob {
   label: string;
   kind: ExportRequest['kind'];
   status: ExportJobStatus;
-  phase: 'preparing' | 'audio' | 'rendering' | 'encoding' | 'copying' | 'finishing' | null;
+  phase: ExportPhase | null;
+  phaseAt?: number | null;
+  /** A fraction of the current stage, when the server can measure that stage. */
+  phaseProgress?: number | null;
+  /** Sound may be worked on concurrently with picture rendering. */
+  audioPhase?: 'audio' | 'loudness' | null;
   /** 0 to 1. */
   progress: number;
   framesDone: number;
@@ -69,6 +79,12 @@ export interface ExportJob {
   draftsRefused?: string;
   /** The export stopped because the disk is full. */
   diskFull?: boolean;
+  /** The frames are drawn without a graphics chip (no driver that reaches it): the export is slow. */
+  software?: boolean;
+  /** Shared browser limit selected for an editing-project export. */
+  renderWorkers?: number;
+  /** Maximum simultaneous postprocessing tasks in an editing-project pipeline. */
+  postWorkers?: number;
   error?: string;
   /** Cancel was asked and the export is stopping (still `running` until it has). */
   cancelling?: boolean;
@@ -81,6 +97,8 @@ export interface ExportJob {
 export interface ExportCapabilities {
   h264: boolean;
   hevc: boolean;
+  /** HEVC held to a bitrate (libx265) */
+  hevcBitrate: boolean;
   hevcAlpha: boolean;
   vp9: boolean;
   prores: boolean;
@@ -96,17 +114,26 @@ async function call<T>(url: string, init?: RequestInit & { json?: unknown }): Pr
     ...init,
     ...(init?.json !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(init.json) } : {}),
   });
-  const body = await res.json().catch(() => ({})) as { error?: string };
-  if (!res.ok) throw new Error(body.error || `Studio answered ${res.status}`);
+  const body = await res.json().catch(() => ({})) as { error?: string; code?: string };
+  if (!res.ok) throw Object.assign(new Error(body.error || `Studio answered ${res.status}`), { code: body.code });
   return body as T;
 }
 
-/**
- * The project's exports, where they go by default, what this machine encodes, how many subtitle cues the film has, and
- * how big the project and its parts are.
- */
-export function listExports(projectId: string): Promise<{ exports: ExportJob[]; folder: string; can: ExportCapabilities; drafts?: { jianying: boolean; capcut: boolean }; subtitles?: number; captionTracks?: boolean; project?: ProjectSizes }> {
-  return call(endpoint(projectId), { cache: 'no-store' });
+/** The queue is fetched independently of media probes and project folder scans. */
+export function listExports(projectId: string): Promise<{ exports: ExportJob[] }> {
+  return call(`${endpoint(projectId)}?view=queue`, { cache: 'no-store' });
+}
+
+export function exportSettings(projectId: string, signal: AbortSignal): Promise<{ folder: string; can: ExportCapabilities; render: { auto: number; max: number }; drafts: { jianying: boolean; capcut: boolean } }> {
+  return call(`${endpoint(projectId)}?view=settings`, { signal, cache: 'no-store' });
+}
+
+export function exportCaptions(projectId: string, signal: AbortSignal): Promise<{ subtitles: number; captionTracks: boolean }> {
+  return call(`${endpoint(projectId)}?view=captions`, { signal, cache: 'no-store' });
+}
+
+export function exportProjectSizes(projectId: string, signal: AbortSignal): Promise<ProjectSizes> {
+  return call(`${endpoint(projectId)}?view=project`, { signal, cache: 'no-store' });
 }
 
 /** A video file's frame rate (`media?what=probe`); null when it has none or can't be read. */
@@ -118,8 +145,8 @@ export async function probeFps(projectId: string, path: string): Promise<number 
 }
 
 /** Queue exports, all or none. `folder`: where to write them (absolute, or ~/…); missing = the default folder. */
-export async function startExports(projectId: string, jobs: readonly ExportRequest[], folder?: string): Promise<ExportJob[]> {
-  const body = await call<{ exports: ExportJob[] }>(endpoint(projectId), { method: 'POST', json: { jobs, ...(folder ? { folder } : {}) } });
+export async function startExports(projectId: string, jobs: readonly ExportRequest[], folder?: string, filmRev?: string): Promise<ExportJob[]> {
+  const body = await call<{ exports: ExportJob[] }>(endpoint(projectId), { method: 'POST', json: { jobs, folder, filmRev } });
   return body.exports;
 }
 

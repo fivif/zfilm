@@ -69,7 +69,7 @@ const taken = (/** @type {unknown} */ e) => ['EADDRINUSE', 'EACCES'].includes(/*
 try { const { adoptPreviousLibrary } = await import('../../src/locations.mjs'); adoptPreviousLibrary(); } catch { /* as it was */ }
 
 try {
-  studio = await startStudio({ port, advertise: true, onQuit: stop }).catch((e) => {
+  studio = await startStudio({ port, advertise: true, onQuit: stop, indexMedia: true }).catch((e) => {
     if (!port || !taken(e)) throw e;
     /* started again after an end: another Studio took the port meanwhile, and it is the one to use */
     if (process.env.OPENFILM_STUDIO_RESTARTED === '1') {
@@ -77,7 +77,7 @@ try {
       process.exit(0);
     }
     console.error(`port ${port} is not free; Studio takes another`);
-    return startStudio({ port: 0, advertise: true, onQuit: stop });
+    return startStudio({ port: 0, advertise: true, onQuit: stop, indexMedia: true });
   });
 } catch (e) {
   console.error(e);

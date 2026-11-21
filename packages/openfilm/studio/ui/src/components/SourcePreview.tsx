@@ -13,14 +13,16 @@ import { useT } from '@/i18n';
 import { STILL_DROP_MS } from '@/lib/asset-timeline';
 import type { SourceRange } from '@/lib/media-place';
 import { exactRate, formatTimecode, snapToFrame, useTimecodeFps } from '@/lib/timecode';
-import { cuePlain, readVtt } from '../../../../src/captions.mjs';
+import { cuePlain, readVtt, voiceTranscriptText } from '../../../../src/captions.mjs';
 import { type MediaSources, type WorkspaceResource } from '@/lib/workspace-resources';
+import { useVideoPlayback } from '@/lib/video-playback';
 import { keyAction } from '@/lib/keymap-store';
 import { isTypingTarget } from './typing-target';
 import { CLEAR, KIND_ICON, MediaPreview } from './MediaPreview';
 import { PANE_BTN, PANE_ICON } from './dock-pane-bar';
 import { Tooltip } from './Tooltip';
 import { ViewerBar } from './ViewerBar';
+import { clearResourceDrag, dragPicture, setResourceDragData } from '@/lib/resource-drag';
 
 /** A file's in and out marks (its own seconds), kept while Studio is open: back on a file, its marks are there. */
 type Marks = { in: number | null; out: number | null };
@@ -128,7 +130,7 @@ function SourceBar({ time, duration, playing, onToggle, onSeek, disabled, marks,
 }) {
   const t = useT();
   const marked = marks && (marks.in != null || marks.out != null)
-    ? `${formatTimecode((marks.in ?? 0) * 1000, { hours: false })} – ${formatTimecode((marks.out ?? duration) * 1000, { hours: false })}`
+    ? `${formatTimecode((marks.in ?? 0) * 1000)} – ${formatTimecode((marks.out ?? duration) * 1000)}`
     : null;
   return (
     <div className="shrink-0 pt-1">
@@ -140,7 +142,7 @@ function SourceBar({ time, duration, playing, onToggle, onSeek, disabled, marks,
         onPlayPause={onToggle}
         onFullscreen={onFullscreen}
         /* the part marked with I and O, while there is one (`,` and `.` put it on the film) */
-        extra={marked ? <span data-source-range="" className="shrink-0 text-[11px] tabular-nums text-[var(--accent)]">{marked}</span> : undefined}
+        extra={marked ? <span data-source-range="" className="min-w-0 truncate text-[11px] tabular-nums text-[var(--accent)]">{marked}</span> : undefined}
       />
     </div>
   );
@@ -156,23 +158,27 @@ export interface SourcePreviewProps {
   file: WorkspaceResource;
   sources: MediaSources;
   onClose: () => void;
+  /** The resource center owns a modal preview; its transport keys remain local to that preview. */
+  withinDialog?: boolean;
+  /** A preview from Saved keeps its import identity when dragged onto the film. */
+  saved?: boolean;
   /** Put the file on the film at its playhead: the part marked (null: all of it), inserted or over what is there. */
   onPlace?: (mode: 'insert' | 'overwrite', range: SourceRange | null) => void;
 }
 
 /** A WebVTT's lines as they read (a transcript, a subtitle file): each one's time, and what it says. */
-function VttLines({ url }: { url: string }) {
+function VttLines({ url, path }: { url: string; path: string }) {
   const t = useT();
   const [lines, setLines] = React.useState<{ start: number; text: string }[] | null>(null);
   React.useEffect(() => {
     let current = true;
     setLines(null);
     fetch(url).then((r) => (r.ok ? r.text() : '')).then(
-      (text) => { if (current) setLines(readVtt(text).cues.map((c) => ({ start: c.start, text: cuePlain(c.text) }))); },
+      (text) => { if (current) setLines(readVtt(voiceTranscriptText(path, text)).cues.map((c) => ({ start: c.start, text: cuePlain(c.text) }))); },
       () => { if (current) setLines([]); },
     );
     return () => { current = false; };
-  }, [url]);
+  }, [url, path]);
   if (!lines) return null;
   if (!lines.length) return <p className="text-[11.5px] text-[var(--text-faint)]">{t('media.transcriptEmpty')}</p>;
   return (
@@ -205,14 +211,16 @@ export function SourcePreview(props: SourcePreviewProps) {
     : <MediaPreviewPane key={props.file.path} {...props} />;
 }
 
-function MediaPreviewPane({ file, sources, onClose, onPlace }: SourcePreviewProps) {
+function MediaPreviewPane({ file, sources, onClose, onPlace, withinDialog, saved }: SourcePreviewProps) {
   const t = useT();
   const rootRef = React.useRef<HTMLDivElement>(null);
   const mediaRef = React.useRef<HTMLVideoElement & HTMLAudioElement>(null);
   const [playing, setPlaying] = React.useState(false);
   const [time, setTime] = React.useState(0);
   const [duration, setDuration] = React.useState((file.durationMs ?? 0) / 1000);
-  const [failed, setFailed] = React.useState(false);
+  const [failedFile, setFailed] = React.useState(false);
+  const video = useVideoPlayback(file, sources);
+  const failed = file.kind === 'video' ? video.failed : failedFile;
   const timed = file.kind === 'video' || file.kind === 'audio';
   const src = sources.file(file);
 
@@ -230,13 +238,15 @@ function MediaPreviewPane({ file, sources, onClose, onPlace }: SourcePreviewProp
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
-      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+      if (e.defaultPrevented || (!withinDialog && (e.target as Element | null)?.closest?.('[role="dialog"]'))) return;
+      if (keyAction(e) === 'preview-fullscreen') { e.preventDefault(); e.stopPropagation(); if (!e.repeat) toggleFullscreen(rootRef.current); return; }
+      if (e.key === 'Escape') { e.preventDefault(); if (document.fullscreenElement) void document.exitFullscreen(); else onClose(); }
       /* space plays the source while it is up, not the film behind it */
-      if (e.key === ' ' && timed) { e.preventDefault(); e.stopPropagation(); toggle(); }
+      if (keyAction(e) === 'play-pause' && timed) { e.preventDefault(); e.stopPropagation(); if (!e.repeat) toggle(); }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose, timed, toggle]);
+  }, [onClose, timed, toggle, withinDialog]);
 
   /* the playhead follows the media every frame while it plays (timeupdate is 4 Hz) */
   React.useEffect(() => {
@@ -262,15 +272,26 @@ function MediaPreviewPane({ file, sources, onClose, onPlace }: SourcePreviewProp
 
   return (
     <div ref={rootRef} className="absolute inset-0 z-20 flex flex-col bg-[var(--bg-panel)]">
-      <div className="relative flex min-h-0 flex-1 items-center justify-center px-3 py-2.5 [container-type:size]" onClick={timed ? toggle : undefined}>
+      <div className="relative flex min-h-0 flex-1 items-center justify-center px-3 py-2.5 [container-type:size]" onClick={timed ? toggle : undefined}
+        draggable={Boolean(onPlace) && !failed} data-source-drag="" data-drag-home=""
+        onDragStart={(e) => {
+          mediaRef.current?.pause();
+          const range = timed ? rangeOf(marks, duration) : null;
+          setResourceDragData(e.dataTransfer, { ...file, ...(saved ? { saved: file.path } : {}), ...(duration > 0 ? { durationMs: duration * 1000 } : {}), ...(range ? { range } : {}) });
+          e.dataTransfer.effectAllowed = 'copy';
+          dragPicture(e);
+        }}
+        onDragEnd={clearResourceDrag}>
         {failed ? (
           <p className="text-[12.5px] text-[var(--text-muted)]">{t('media.cannotPreview')}</p>
+        ) : file.kind === 'video' && video.preparing ? (
+          <p role="status" className="text-[12.5px] text-[var(--text-muted)]">{video.message(t)}</p>
         ) : file.kind === 'video' ? (
           <video
             key={file.path}
             data-asset-preview-control=""
             ref={mediaRef}
-            src={src}
+            src={video.src}
             /* a poster that fails to load covers the first frame in black: only when there is one */
             poster={sources.poster?.(file)}
             playsInline
@@ -280,10 +301,11 @@ function MediaPreviewPane({ file, sources, onClose, onPlace }: SourcePreviewProp
             className={FIT}
             style={fitted(shape)}
             {...mediaEvents}
+            onError={video.onError}
             onLoadedMetadata={(e) => { shapeOf(e.currentTarget.videoWidth, e.currentTarget.videoHeight); mediaEvents.onLoadedMetadata?.(e); }}
           />
         ) : file.kind === 'image' ? (
-          <img data-asset-preview-control="" src={src} alt={file.name} className={FIT} style={fitted(shape)} onError={() => setFailed(true)}
+          <img data-asset-preview-control="" draggable={false} src={src} alt={file.name} className={FIT} style={fitted(shape)} onError={() => setFailed(true)}
             onLoad={(e) => shapeOf(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} />
         ) : file.kind === 'audio' ? (
           <div data-asset-preview-control="" className="relative h-[42%] w-full max-w-[920px] overflow-hidden rounded-md">
@@ -295,7 +317,7 @@ function MediaPreviewPane({ file, sources, onClose, onPlace }: SourcePreviewProp
           /* a subtitle or transcript file: its lines, as they read */
           <div data-asset-preview-control="" className="h-full w-full max-w-[640px] overflow-y-auto py-2">
             <p className="mb-3 truncate text-[13px] font-medium text-[var(--text)]">{file.name}</p>
-            <VttLines url={src} />
+            <VttLines url={src} path={file.path} />
           </div>
         ) : (
           /* a file Studio does not play: what it is, by its icon and name */
@@ -319,7 +341,7 @@ function MediaPreviewPane({ file, sources, onClose, onPlace }: SourcePreviewProp
       ) : (
         <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-[12px] text-[var(--text-muted)]">
           <span className="min-w-0 flex-1 truncate">{file.w && file.h ? `${file.w} × ${file.h}` : ''}</span>
-          <Tooltip label={t('viewer.fullscreen')}>
+          <Tooltip label={t('viewer.fullscreen')} action="preview-fullscreen">
             <button type="button" aria-label={t('viewer.fullscreen')} onMouseDown={(e) => e.preventDefault()} onClick={() => toggleFullscreen(rootRef.current)} className={PANE_BTN}>
               <Expand size={PANE_ICON} />
             </button>
@@ -340,7 +362,7 @@ const CLOCK_PINGS = 5;
  * project's frame grid (studio/server/bridge.js `play`): no message a frame, so a busy editor does not hold the picture.
  * A page clip of Saved plays as the film had it: laid out at its clip's size, with the changes made in it.
  */
-function PagePreview({ file, sources, onClose, onPlace }: SourcePreviewProps) {
+function PagePreview({ file, sources, onClose, onPlace, withinDialog, saved }: SourcePreviewProps) {
   const t = useT();
   const rootRef = React.useRef<HTMLDivElement>(null);
   const frameRef = React.useRef<HTMLIFrameElement>(null);
@@ -476,16 +498,27 @@ function PagePreview({ file, sources, onClose, onPlace }: SourcePreviewProps) {
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
-      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
-      if (e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggle(); }
+      if (e.defaultPrevented || (!withinDialog && (e.target as Element | null)?.closest?.('[role="dialog"]'))) return;
+      if (keyAction(e) === 'preview-fullscreen') { e.preventDefault(); e.stopPropagation(); if (!e.repeat) toggleFullscreen(rootRef.current); return; }
+      if (e.key === 'Escape') { e.preventDefault(); if (document.fullscreenElement) void document.exitFullscreen(); else onClose(); }
+      if (keyAction(e) === 'play-pause') { e.preventDefault(); e.stopPropagation(); if (!e.repeat) toggle(); }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose, toggle]);
+  }, [onClose, toggle, withinDialog]);
 
   return (
     <div ref={rootRef} className="absolute inset-0 z-20 flex flex-col bg-[var(--bg-panel)]">
-      <div ref={boxRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3 py-2.5" onClick={toggle}>
+      <div ref={boxRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3 py-2.5" onClick={toggle}
+        draggable={Boolean(onPlace) && Boolean(size) && !failed} data-source-drag="" data-drag-home=""
+        onDragStart={(e) => {
+          pause();
+          const range = timedPage ? rangeOf(marks, duration) : null;
+          setResourceDragData(e.dataTransfer, { ...file, ...(saved ? { saved: file.path } : {}), durationMs: duration * 1000, ...(!timedPage ? { endless: true } : {}), ...(range ? { range } : {}) });
+          e.dataTransfer.effectAllowed = 'copy';
+          dragPicture(e);
+        }}
+        onDragEnd={clearResourceDrag}>
         {/* nothing to play it on (no surface for this page) is the same as a page that failed */}
         {failed || !surface ? <p className="text-[12.5px] text-[var(--text-muted)]">{t('media.cannotPreview')}</p> : (
           /* on a checkerboard: what the page leaves clear is seen to be clear (a page made to go over others) */

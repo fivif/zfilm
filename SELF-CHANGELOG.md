@@ -1,6 +1,7 @@
 # 自家构建：版本与改动台账
 
-本仓库是 OpenFilm 的**自维护分支**，不是上游的镜像。分支基线：上游 `v0.3.2`（commit `758b1a3`）。
+本仓库是 OpenFilm 的**自维护分支**，不是上游的镜像。分支基线：上游 `v0.4.1`（commit `a1b8d751`，
+2026-11-22 同步完成）；上一段基线是 `v0.3.2`（commit `758b1a3`），`v0.3.3`～`v0.3.6` 的条目是那段时间自己的改动。
 上游远端保留为 `upstream`（`https://github.com/openfilm/openfilm.git`），用于 `git fetch upstream` / diff / cherry-pick。
 
 ---
@@ -379,6 +380,130 @@ SHA256 一致，元数据 sidecar 与结果一致。剩余的仍在跑，不声�
 
 ---
 
+## V0.4.1：同步上游 0.4.1（2026-11-22）
+
+基线：上游 `v0.4.1` = commit `a1b8d751`，与本树的 merge base 是 `3eacfd63`（= 上游 `v0.3.2` / `758b1a3` 之后
+的窗口）。上游这段是 57 个提交、3296 个文件（新增 2777 / 删除 74 / 修改 445）：关键帧动画系统、区间导出、
+HEVC 播放副本、"长片读快 30 倍"、workspace 布局编辑器（拖放面板 + 自定义分割树 + 预设）。
+
+合并方式 `git merge -X theirs upstream/main`，4 个 modify/delete 冲突按上游删除。`-X theirs` 只在**冲突 hunk**
+上取对方，重命名 + 双方改写会留下"半新半旧"的混合体——下面 8 条就是逐个查出来的。
+
+### 1. 0.3.x 的两个旧 skill 残留
+
+`packages/openfilm/manual/` 里还留着 0.3 时代的 `canvas/`、`edit/`（0.4.1 已合并为 `film/`），
+`src/skills.test.mjs` 报平台列表重复 + `edit repeats the system prompt`。删掉两个目录，`manual/film/SKILL.md`
+换上游版（本树混进了 0.3 的索引前言 4 行）。→ `src/skills.test.mjs` 32/32。
+
+### 2. `preload.cjs` 暴露的名字与 UI 读的名字不一致
+
+`preload.cjs` 给的是 `saveOpenFilmModels`，UI（`settings/ZfilmAgentDialog.tsx`）读的是
+`studioHost?.agents?.saveZfilmModels` —— 可选链，所以**静默失效**，模型顺序与隐藏设置存不下来。改成
+`saveZfilmModels`（IPC 频道 `desktop:agents:openfilm-models` 不动，`main.mjs` 同频道）。
+
+### 3. `preparePage` 丢了 `late`
+
+分支的"慢加载不算失败"（V0.3.3 第 1 条）被换成上游的尾部：超时仍 resolve，但不再返回 `{ late }`、也不再对
+late 的绘制失败让步。恢复：
+
+```js
+if (waitForPaint) await paintPage(contents, frameOptions).catch((error) => { if (!late) throw error; });
+return { late };
+```
+
+→ `src/page-presentation.test.mjs` 27/27。
+
+### 4. `OPENFILM_RUN` 又往脚本里塞了一遍
+
+0.4.1 已把这件事交给 agent 会话：`agents.mjs:1342`
+`...(this.opts.binDir ? { OPENFILM_RUN: run ?? 'openfilm' } : {})`。分支的
+`installOpenfilmCommand` 还在 `env` 里注入整个路径，覆盖掉"PATH 上就能按名字叫"的那种会话。改成
+`commandScript(node, openfilmCli(), { ffmpeg, env })`。→ `src/openfilm-command.test.mjs` 6 tests / 5 pass / 1 skip。
+
+### 5. 合并留下的重复顶层声明（3 个文件）
+
+`studio/server/server.mjs`（`outerProject` ×2）、`src/timeline.mjs`（`ANIMATED`/`FRAMES_KEPT`/`animationOf`/
+`frameAt`/`frameUrl`/`animate`/`hold`/`moving`/`undecoded`/`notPlayed` 各 ×2）、
+`apps/desktop/src/openfilm-command.mjs`（`openfilmCommand` ×2）。
+
+**注意**：`studio/server/tsconfig.json` 是 `checkJs: false`，类型检查抓不到这类问题。有效的闸门是
+`for f in $(git ls-files '*.mjs'); do node --check "$f"; done`（现在 0 failures）。
+
+### 6. `render.mjs` 重复 `const size`（TDZ）
+
+分支早期自己算的 `const size = { w: Math.round(...) }` 与上游的 `evenSize` 版并存。删掉前者，把
+"4K 及以上软编 `veryfast -crf 17` + BT709"那段挪到上游 `const size` 之后（现在 `src/render.mjs:280-285`）。
+
+### 7. `main.mjs` 三个 import 丢了
+
+`import { savedRoot } from 'openfilm/locations';`、`createLibraryImportService`（`./library-import-service.mjs`）、
+`createMediaAnalyzer`（`./library-agent-analysis.mjs`）——启动即 `ReferenceError: createLibraryImportService is not defined`。
+
+### 8. `updates.mjs` 变成"桩注释 + 上游实现"的混合体
+
+启动报 `ReferenceError: controller is not defined`（`updates.mjs:25`）。整个重写为纯桩：`startUpdates()` 返回
+`{ packaged: false, snapshot: off, check, manualCheck, restart, installAtLaunch, channel, setChannel, close }`，
+`snapshot` 恒 `{ status: 'off', … }`。`main.mjs` 用 `updates.packaged ? … : null`，所以菜单里没有更新项，
+`/api/update` 恒 409（与 V0.3.3 的"无更新机制"一致）。
+
+### 9. 测试夹具缺 `libraryImport`
+
+`project-bridge.test.mjs` 与上游逐字节相同，但本树 `shell/bridge.ts:62` 会调
+`native.libraryImport.onChange(...)`（文件夹导入），夹具里没有 → 11 个测试全挂
+（`TypeError: Cannot read properties of undefined (reading 'onChange')`）。夹具的 `native` 里补
+`libraryImport: { create, listJobs, retryFailed, onChange: () => () => {} }`。→ 11/11。
+
+### 打包：`ElectronAsarIntegrity` 校验的是 **asar 头**的哈希
+
+`apps/desktop/scripts/release.mjs` 的 `afterPack` 钩子原来对整份 `app.asar` 取 sha256，Electron 校验的是
+**asar 头 JSON** 的 sha256（头长度在前 12~15 字节，`readUInt32LE(12)`；头从第 16 字节开始）。哈希对不上时
+打包版**启动即 SIGTRAP**、无 stderr、不建 userData 目录。已改成 `asarHeaderHash()` 按头计算，写回
+Info.plist 的 `ElectronAsarIntegrity`。
+
+另一个会让打包版"看起来起了、其实卡住"的坑：`safeStorage.isEncryptionAvailable()` 在 macOS 上会卡在
+keychain 弹窗（`sample` 显示 `SecItemCopyMatching → SSGroupImpl::decodeDataBlob`，同时有 SecurityAgent 进程）。
+`security delete-generic-password -s "Zfilm Safe Storage"` 删掉旧条目后重建即可无提示通过。
+
+### 托管服务模块：不再删
+
+V0.3.3 删过 `account.mjs`、`providers/openfilm.mjs`、`openfilm-agent.mjs`。0.4.1 把 provider 注册进
+`studio/server/providers/index.mjs`、把 `createZfilmAgent` 接进 `main.mjs`，删了就是大面积回退。现在保留，
+"不连托管服务"由上层保证：更新恒 off、`FEED = null`、provider 只有人真的选了才用。
+
+### 版本：0.3.6 → **0.4.1**（`packages/openfilm`、`packages/shared`、`apps/desktop`）
+
+**真机验证**：`Zfilm.app`（arm64，未签名）启动后 Studio 子进程正常，
+`/api/health` → `{"product":"openfilm-studio","version":"0.4.1","filmOrigin":"http://localhost:4748","app":true}`，
+`/` 返回编辑器 HTML（`<title>Zfilm</title>`），`/api/projects` → `{"projects":[]}`。
+产物：`.release/arm64/out/Zfilm-arm64.dmg`、`Zfilm-0.4.1-arm64-mac.zip`（约 370 MB）。
+
+**测试**：
+
+- `apps/desktop`：566 tests，**除下面 3 个 bench 外全绿**。合并后 19 red 的来源逐个清掉：`page-presentation` 3、
+  `openfilm-command` 1、`project-bridge` 11（夹具缺 `libraryImport`）、`skills` 1、`bench` 里并发抖动的
+  `conversation-agent`（单跑通过）。
+- `packages/openfilm`：2643 tests / 2618 pass / 8 fail / 17 skipped。8 个红的按性质分三类：
+  - **改名留下的数字残留**（已修）：`studio/server/captions.test.mjs` 的 `chars` 数组还在拼 `O-p-e-n-F-i-l-m`；
+    `studio/server/subtitle-segments.test.mjs` 的 `to: 14` 是按 `It's OpenFilm.`（14 字符）算的，改成
+    `It's Zfilm.` 就是 11。
+  - **与"无更新机制"冲突**（已修）：`studio/client.test.mjs` 断言从 `update.json` 里学到 `99.0.0`，而本树的
+    `newerOpenfilm()` 恒 `null`（不发 registry 请求、不读别人留下的 `update.json`）。测试改写成本树的契约。
+  - **本机环境**（未修，与合并无关）：`studio/timeline-range-clear.test.mjs`、`studio/canvas-warm.test.mjs`
+    ×2、`studio/layer-selection.test.mjs` 用英文选择器（`Clear range` 等，`zh-CN.ts` 里是「清除区间」），
+    本机系统语言是 `zh-CN`；`src/direct.test.mjs` 的帧映射、`src/color/page-grade-film.test.mjs` 的 LUT 颜色
+    （39,107,203 vs 43,109,206）、`src/video-effects.test.mjs` 的人像分割颜色，都是 ffmpeg/模型/GPU 侧数值差异。
+
+**仍红的 3 个 bench（Playwright 驱动真实 Electron UI）——上游自己的问题，不是这次合并带进来的**：
+
+- `bench/media-menu.test.mjs` 等 `getByRole('button', { name: '素材' })`，而聊天窗按钮的文案来自
+  `chat/src/i18n/locales/zh-CN.ts` 的 `project.assets = '素材库'`（上游同值）→ 选择器过期。
+- `bench/agent-setup.test.mjs` 等 `Connection help for Cursor`，这个字符串在上游与本树的**源码里都不存在**
+  （`bench/openfilm-agent.test.mjs:73` 断言它 `count() === 0`），同一处 API 自相矛盾。
+- `bench/workspaces.test.mjs` 用英文选择器（`Layout` / `Edit layout` / `Done`），本机系统语言是 `zh-CN`，
+  菜单项是"布局"；强制 `--lang=en` 后才能走到 `:143`（编辑模式下独立素材库应收起），说明它假设英文 UI。
+
+---
+
 ## 怎么用
 
 ```powershell
@@ -425,15 +550,22 @@ apps/desktop/src/page-presentation.mjs
 apps/desktop/src/updates.mjs
 apps/desktop/src/main.mjs
 apps/desktop/src/menu.test.mjs
+apps/desktop/src/preload.cjs
+apps/desktop/src/openfilm-command.mjs
+apps/desktop/shell/bridge.ts
 apps/desktop/scripts/release.mjs
 apps/desktop/package.json
 packages/openfilm/src/render.mjs
+packages/openfilm/src/timeline.mjs
 packages/openfilm/src/seekable.mjs
 packages/openfilm/bin/openfilm.mjs
+packages/openfilm/manual/film/SKILL.md
 packages/openfilm/studio/client.mjs
 packages/openfilm/studio/server/server.mjs
+packages/openfilm/studio/server/library.mjs
 packages/openfilm/product.official.json
 packages/openfilm/package.json · packages/shared/package.json （版本号）
+全仓 `OpenFilm` → `Zfilm`（1895 处 / 619 文件；小写 openfilm 的包名、CLI、openfilm.dev 一律不动）
 ```
 
 ## 已知未做（按优先级）

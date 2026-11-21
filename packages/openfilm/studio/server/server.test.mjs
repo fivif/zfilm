@@ -32,6 +32,23 @@ const api = (path, { method = 'GET', body, key = studio.key, headers = {} } = {}
   redirect: 'manual',
 });
 
+test('the favorites API keeps skill stars across reads and removes only the selected star', async () => {
+  const path = '/api/library/favorites';
+  const previous = await (await api(path)).json();
+  const ids = ['skill:river/remake', 'skill:openfilm/remake', 'skill:project/my-style', 'effects/snow'];
+  try {
+    const saved = await api(path, { method: 'PUT', body: { ids: [...ids, ids[0], 'skill:../bad', 'not-in-library'] } });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await saved.json(), { ids });
+    assert.deepEqual(await (await api(path)).json(), { ids });
+    const removed = await api(path, { method: 'PUT', body: { ids: ids.slice(1) } });
+    assert.deepEqual(await removed.json(), { ids: ids.slice(1) });
+    assert.deepEqual(await (await api(path)).json(), { ids: ids.slice(1) });
+  } finally {
+    await api(path, { method: 'PUT', body: previous });
+  }
+});
+
 /** A page's stream of events (a WebSocket), until `until(events)`. */
 function collect(path, until) {
   return new Promise((done, fail) => {
@@ -393,13 +410,16 @@ test('the preview plays heavy footage from its proxy once made; what the file is
   const played = await size();
   assert.ok(played > 0 && played !== statSync(big).size, 'the proxy');
   assert.equal(await size('?film-facts=1'), statSync(big).size, 'what the file is: the file');
+  assert.equal(await size('?of-original=1'), statSync(big).size, 'a download still reads the original');
   /* off: the original, and no proxy asked for */
   assert.deepEqual(await (await api('/api/prefs', { method: 'PATCH', body: { proxies: { on: false } } })).json(), { proxies: { on: false, height: 720 }, seenVersion: null, projectsFolder: null, keys: null, autoVersions: false, showAutoVersions: false, libraryCategories: null });
   assert.equal(await size(), statSync(big).size);
   assert.deepEqual((await (await api(`/api/projects/${project.id}/proxies`, { method: 'POST', body: {} })).json()).states, {});
   /* footage the editor's browser does not decode: its proxy is made and played, off as on */
   const hevc = join(project.path, 'assets', 'drone.mp4');
-  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=1280x720:rate=25:duration=1', '-c:v', 'libx265', '-pix_fmt', 'yuv420p10le', '-tag:v', 'hvc1', '-x265-params', 'log-level=error', hevc]);
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=1280x720:rate=25:duration=1',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-c:v', 'libx265', '-pix_fmt', 'yuv420p10le',
+    '-tag:v', 'hvc1', '-x265-params', 'log-level=error', '-c:a', 'aac', hevc]);
   answer = await (await api(`/api/projects/${project.id}/proxies`, { method: 'POST', body: {} })).json();
   assert.deepEqual(answer.checks, { 'assets/drone.mp4': { type: 'video/mp4; codecs="hvc1.2.4.L93.B0"', width: 1280, height: 720, fps: 25 } }, 'what the editor asks its browser');
   assert.deepEqual(answer.states, {}, 'not said yet');
@@ -410,6 +430,33 @@ test('the preview plays heavy footage from its proxy once made; what the file is
   assert.deepEqual(answer.states, { 'assets/drone.mp4': { state: 'ready', needed: true } });
   const served = (await (await fetch(`${folder}assets/drone.mp4`)).arrayBuffer()).byteLength;
   assert.ok(served > 0 && served !== statSync(hevc).size, 'its proxy');
+  const copyOf = `/api/projects/${project.id}/playback?path=assets%2Fdrone.mp4`;
+  assert.deepEqual(await (await api(copyOf, { method: 'POST' })).json(), { state: 'ready', needed: true, height: 720 });
+  const response = await api(copyOf);
+  assert.equal(response.headers.get('content-type'), 'video/mp4');
+  const copy = join(scratch, 'drone-playback.mp4');
+  writeFileSync(copy, Buffer.from(await response.arrayBuffer()));
+  const { streams } = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_name,pix_fmt', '-of', 'json', copy]));
+  assert.deepEqual(streams, [{ codec_name: 'h264', pix_fmt: 'yuv420p' }, { codec_name: 'aac' }]);
+  assert.deepEqual(Buffer.from(await (await fetch(`${folder}assets/drone.mp4?of-original=1`)).arrayBuffer()), readFileSync(hevc));
+  const range = await api(copyOf, { headers: { range: 'bytes=0-9' } });
+  assert.equal(range.status, 206);
+  assert.deepEqual(Buffer.from(await range.arrayBuffer()), readFileSync(copy).subarray(0, 10));
+  const savedPath = 'saved%2Fdrone-hevc.mp4';
+  const put = await fetch(`${studio.origin}/api/saved/files?path=${savedPath}`, {
+    method: 'PUT', headers: { 'x-studio-key': studio.key, 'content-type': 'application/octet-stream' }, body: readFileSync(hevc),
+  });
+  assert.equal(put.status, 200);
+  const savedCopy = `/api/saved/playback?path=${savedPath}`;
+  let savedPlayback;
+  for (const end = Date.now() + 15_000; Date.now() < end;) {
+    savedPlayback = await (await api(savedCopy, { method: 'POST' })).json();
+    if (savedPlayback.state === 'ready' || savedPlayback.state === 'failed') break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.equal(savedPlayback.state, 'ready');
+  assert.equal((await api(savedCopy)).headers.get('content-type'), 'video/mp4');
+  assert.deepEqual(Buffer.from(await (await api(`/api/saved/file?path=${savedPath}`)).arrayBuffer()), readFileSync(hevc));
   assert.equal(await size(), statSync(big).size, 'the heavy one still the original');
   await api('/api/prefs', { method: 'PATCH', body: { proxies: { on: true } } });
 });
@@ -971,6 +1018,8 @@ test('the preview\'s mixer gets a file\'s sound alone (?film-sound), never the w
   const res = await fetch(`${folder}assets/talk.mp4?film-sound=1&v=1`);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('content-type'), 'audio/mp4');
+  assert.ok(Math.abs(Number(res.headers.get('x-film-sound-length')) - 20) < 0.1, 'its length told, for the mixer to stream a long one');
+  assert.match(String(res.headers.get('access-control-expose-headers')), /x-film-sound-length/, 'and readable by the editor');
   const bytes = Buffer.from(await res.arrayBuffer());
   assert.equal(bytes.subarray(4, 8).toString(), 'ftyp', 'an MP4 (.m4a) of the sound');
   assert.ok(bytes.length < statSync(join(project.path, 'assets', 'talk.mp4')).size / 10, `${bytes.length} bytes: the sound alone`);
@@ -980,6 +1029,23 @@ test('the preview\'s mixer gets a file\'s sound alone (?film-sound), never the w
   assert.equal((await fetch(`${folder}assets/mute.mp4?film-sound=1`)).status, 204);
   assert.equal((await fetch(`${folder}assets/gone.mp4?film-sound=1`)).status, 404);
   assert.equal((await fetch(`${folder}.film/cache/audio/x.m4a?film-sound=1`)).status, 404, 'still nothing hidden');
+});
+
+test('a sound asked for and given up while its copy is made (a media element that seeked on) leaves Studio running', async () => {
+  const { project } = await (await api('/api/projects', { method: 'POST', body: { path: join(scratch, 'Given up') } })).json();
+  mkdirSync(join(project.path, 'assets'), { recursive: true });
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=25:duration=30', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=30', '-shortest', '-pix_fmt', 'yuv420p', join(project.path, 'assets', 'talk.mp4')]);
+  const { folder } = await (await api(`/api/projects/${project.id}`)).json();
+  const asked = request(`${folder}assets/talk.mp4?film-sound=1`, { headers: { range: 'bytes=0-' } });
+  asked.on('error', () => {});
+  asked.end();
+  await new Promise((r) => setTimeout(r, 20));
+  asked.destroy();
+  const audio = join(project.path, '.film', 'cache', 'audio');
+  for (let i = 0; i < 200 && !(existsSync(audio) && readdirSync(audio).some((f) => f.endsWith('.m4a'))); i++) await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal((await fetch(`${folder}assets/talk.mp4?film-sound=1`)).status, 200, 'the pages still answer');
+  assert.equal((await api('/api/health', { key: null })).status, 200);
 });
 
 /** A GET (or an upgrade, with `headers`) sent with the Host `host`: fetch never lets a page choose it, a rebound name does. */
@@ -1012,6 +1078,22 @@ test('only requests addressed to this machine by name are answered, on both orig
   const upgrade = { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', 'x-studio-key': studio.key };
   assert.equal(await asHost(`${studio.origin}/api/events`, `evil.test:${editorPort}`, upgrade), 403);
   assert.equal(await asHost(`${studio.origin}/api/events`, `127.0.0.1:${editorPort}`, upgrade), 101);
+  /* opened as localhost or [::1], the editor goes to Studio's own address: its cookie, its writes' Origin and its
+     film origin's CORS are all that origin's, so a page left on the alias loads but cannot write */
+  const where = (host, path, headers = {}) => new Promise((done, fail) => {
+    const req = request(`${studio.origin}${path}`, { headers: { host, ...headers } });
+    req.on('response', (res) => { res.resume(); done({ status: res.statusCode, location: res.headers.location }); });
+    req.on('error', fail);
+    req.end();
+  });
+  for (const host of [`localhost:${editorPort}`, `[::1]:${editorPort}`]) {
+    assert.deepEqual(await where(host, `/?key=${studio.key}`), { status: 302, location: `${studio.origin}/?key=${studio.key}` }, host);
+    assert.deepEqual(await where(host, '/assets/missing.js'), { status: 302, location: `${studio.origin}/assets/missing.js` }, host);
+    /* a caller that showed its key in the cookie keeps it in the address it lands on */
+    assert.deepEqual(await where(host, '/', { cookie: `openfilm_studio_${editorPort}=${studio.key}` }), { status: 302, location: `${studio.origin}/?key=${studio.key}` }, host);
+  }
+  /* the key is not handed to a caller that did not show it */
+  assert.deepEqual(await where(`localhost:${editorPort}`, '/'), { status: 302, location: `${studio.origin}/` });
 });
 
 test('the film origin serves the film\'s files only: no dot file or folder (.git, .env), no Windows stream, nothing a link leads out to', async () => {

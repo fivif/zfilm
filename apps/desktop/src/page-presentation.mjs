@@ -1,5 +1,5 @@
 /** Switch native pages without exposing the empty window between their frames. No Electron dependency. */
-export function createPagePresentation({ prepare, resume, present, discard, fallback = null, onError = () => {} }) {
+export function createPagePresentation({ prepare, resume, present, discard, fallback = null, canKeep = () => true, onError = () => {} }) {
   const pages = new Map();
   const retired = new Set();
   let current = null;
@@ -36,7 +36,11 @@ export function createPagePresentation({ prepare, resume, present, discard, fall
   function failed(id, ticket, error) {
     // Closing a loading tab destroys its view and rejects loadURL. It is not a failed destination.
     if (ticket !== request || wanted !== id || retired.has(id)) return Promise.resolve(false);
-    onError(error);
+    const currentPage = pages.get(current);
+    const retained = currentPage && !retired.has(current) && canKeep(currentPage.view);
+    if (retained) wanted = current;
+    onError(error, id, retained ? current : null);
+    if (retained) return Promise.resolve(false);
     if (fallback == null || id === fallback) return Promise.resolve(false);
     return show(fallback).then(() => false);
   }
@@ -73,15 +77,7 @@ export function createPagePresentation({ prepare, resume, present, discard, fall
   };
 }
 
-/**
- * Bound the document load and, where the native view needs it, wait for a paint before showing it.
- *
- * A load that is merely slow is not a failed destination. Until 0.3.2 this threw `Page loading timed out`, and
- * `ensure()` answers a rejected prepare by discarding the view, so a heavy project (a large `.film`, dozens of
- * clips) that took over `loadTimeoutMs` to load threw the person back to the projects list: the tab was there,
- * the click did nothing. Now the page is presented while it is still on its way and its frame arrives when it
- * does; only a destroyed renderer fails.
- */
+/** Bound the document load and, where the native view needs it, wait for a paint before showing it. */
 export async function preparePage(contents, url, { loadTimeoutMs = 15_000, waitForPaint = true, ...frameOptions } = {}) {
   let timer;
   let late = false;

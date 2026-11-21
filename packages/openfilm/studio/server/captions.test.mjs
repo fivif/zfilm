@@ -10,7 +10,7 @@ import {
 } from './captions.mjs';
 import { FILM_SUBTITLE_DEFAULT, filmSubtitleShown, filmSubtitleSrt, filmSubtitleVtt } from './film-subtitle.mjs';
 import { HttpError, json } from './http.mjs';
-import { vttOf } from './transcripts.mjs';
+import { readTranscript, vttOf } from './transcripts.mjs';
 import { filmHtml } from '../../src/film-doc.mjs';
 
 /* "One two three. Four five six.", said in 2.5 s of a 3 s file */
@@ -69,7 +69,28 @@ test('a transcript breaks into lines at sentence ends, timed by its words', () =
   ]);
   /* performance tags for TTS are not words */
   assert.equal(spokenLines('[laughs] Hi there.', undefined, 1000)[0].text, 'Hi there.');
+  assert.equal(spokenLines('<break time="500ms"/> 2 < 3.', undefined, 1000)[0].text, '2 < 3.');
   assert.deepEqual(spokenLines('', WORDS, 3000), []);
+});
+
+test('an existing voice-over transcript hides performance tags split across cues and word marks', async () => {
+  const src = 'assets/audio/vo/line.wav';
+  const vtt = vttOf([
+    { text: '<emotion value="calm"/><speed', startMs: 0, endMs: 100, marks: [{ index: 9, startMs: 50 }] },
+    { text: 'ratio="1.05"/>Man, listen.', startMs: 100, endMs: 1300, marks: [{ index: 19, startMs: 400 }] },
+    { text: '<break time="400ms"/>', startMs: 1300, endMs: 1700 },
+    { text: 'Here we go.', startMs: 1700, endMs: 3000, marks: [{ index: 5, startMs: 1900 }] },
+  ], { speaker: 'Ann' });
+  const root = project([], { 'assets/audio/vo/line.vtt': vtt });
+
+  assert.deepEqual(await readTranscript(root, src), {
+    speaker: 'Ann',
+    lines: [
+      { text: 'Man, listen.', startMs: 100, endMs: 1300, marks: [{ index: 0, startMs: 100 }, { index: 5, startMs: 400 }] },
+      { text: 'Here we go.', startMs: 1700, endMs: 3000, marks: [{ index: 0, startMs: 1700 }, { index: 5, startMs: 1900 }] },
+    ],
+  });
+  assert.equal(readFileSync(join(root, 'assets/audio/vo/line.vtt'), 'utf8'), vtt);
 });
 
 test('a slowly spoken line lasts through its words instead of the text-length estimate', () => {
@@ -337,7 +358,7 @@ test('making subtitles transcribes the speech with no transcript; with no servic
 });
 
 test('a transcript written a word (or a character) per cue is its words: they are joined into lines, each still timed', async () => {
-  const chars = ['认', '识', 'O', 'p', 'e', 'n', 'F', 'i', 'l', 'm', '。'];
+  const chars = ['认', '识', 'Z', 'f', 'i', 'l', 'm', '。'];
   const body = `WEBVTT\n\n${chars.map((c, i) => `00:00:00.${String(i * 90).padStart(3, '0')} --> 00:00:00.${String(i * 90 + 90).padStart(3, '0')}\n${c}`).join('\n\n')}\n\n00:00:01.000 --> 00:00:01.000\n \n`;
   const root = project([{ clips: [{ id: 'vo', src: 'assets/vo.wav' }] }], { 'assets/vo.vtt': body });
   const { cues } = await filmCaptions(root, noProbe);

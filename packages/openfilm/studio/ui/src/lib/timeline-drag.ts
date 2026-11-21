@@ -228,14 +228,15 @@ export function applyDrag(
     const floor = follow?.length
       ? Math.min(block.startMs, ...follow.map((b) => b.startMs))
       : block.startMs;
-    const startMs = block.startMs + Math.max(shift, -floor);
+    const beforeStart = deltaMs < -floor;
+    const startMs = block.startMs + (beforeStart ? -floor : Math.max(shift, -floor));
     const durMs = block.endMs - block.startMs;
     const moves = (follow ?? []).map((b) => ({
       id: b.id,
       startMs: b.startMs + (startMs - block.startMs),
       endMs: b.endMs + (startMs - block.startMs),
     }));
-    return { startMs, endMs: startMs + durMs, snappedTo, moves };
+    return { startMs, endMs: startMs + durMs, snappedTo: beforeStart ? null : snappedTo, moves };
   }
 
   if (mode === 'trim-start') {
@@ -416,7 +417,7 @@ export interface Marquee {
  * wholly in empty space selects nothing.
  */
 export function marqueeHits(
-  lanes: readonly { blocks: readonly Block[] }[],
+  lanes: readonly { blocks: readonly Block[]; locked?: boolean }[],
   box: Marquee,
 ): string[] {
   const lo = Math.min(box.fromLane, box.toLane);
@@ -425,7 +426,9 @@ export function marqueeHits(
   const to = Math.max(box.fromMs, box.toMs);
   const out: string[] = [];
   for (let i = lo; i <= hi; i += 1) {
-    for (const b of lanes[i]?.blocks ?? []) {
+    const lane = lanes[i];
+    if (!lane || lane.locked) continue;
+    for (const b of lane.blocks) {
       if (b.startMs < to && b.endMs > from) out.push(b.id);
     }
   }
@@ -458,6 +461,8 @@ export interface DropLane {
   locked?: boolean;
   /** A sound track (A): only sounds go on it, and sounds go on nothing else. */
   sound?: boolean;
+  /** Caption cues move only between caption tracks. */
+  captions?: boolean;
   /** What is taken on this film.html track besides the clips being dragged. Rows of one track share a docIndex. */
   occupied?: readonly { startMs: number; endMs: number }[];
 }
@@ -525,6 +530,7 @@ export function moveDestFor(
   if (target.locked) return { action: 'refuse' };
   /* a sound to a sound track, a picture to a picture track */
   const home = lanes.find((lane) => lane.docIndex === sourceDocIndex);
+  if (Boolean(target.captions) !== Boolean(home?.captions)) return { action: 'refuse' };
   if (Boolean(target.sound) !== (sound ?? Boolean(home?.sound))) return { action: 'refuse' };
   return { action: 'move', trackIndex: target.docIndex };
 }
@@ -565,7 +571,8 @@ export function groupLaneShift(
   lanes: readonly DropLane[],
   wantDelta: number,
 ): GroupLaneShift {
-  if (!members.length) return { ok: true, delta: 0, moves: [] };
+  /* Along their own rows, existing overlaps keep their shape; no new track landing to validate. */
+  if (!members.length || wantDelta === 0) return { ok: true, delta: 0, moves: [] };
   const moves = groupFitsAt(members, lanes, wantDelta);
   if (!moves) return { ok: false, delta: 0, moves: [] };
   return { ok: true, delta: wantDelta, moves };
@@ -585,6 +592,7 @@ function groupFitsAt(
     if (!lane || lane.docIndex == null) return null;
     const moved = lane.docIndex !== home?.docIndex;
     if (moved && lane.locked) return null;
+    if (moved && Boolean(lane.captions) !== Boolean(home?.captions)) return null;
     if (moved && Boolean(lane.sound) !== (m.sound ?? Boolean(home?.sound))) return null;
     landed.push({ member: m, docIndex: lane.docIndex, moved });
   }

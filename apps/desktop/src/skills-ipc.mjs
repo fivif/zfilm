@@ -3,11 +3,11 @@
  *
  * For the composer's Skills button:
  *   desktop:skills:list     { project, agent } → { openfilm: [Skill], own: { agent, filtered, skills: [OwnSkill] }, mine }
- *                           OpenFilm's skills (the project's, the person's own, the official ones), and the agent's
+ *                           Zfilm's skills (the project's, the person's own, the official ones), and the agent's
  *                           own skills with whether each is let in (`filtered` false: it has them all, as in its own
- *                           terminal). OpenFilm's own skill for terminal agents is never among them (agent-skills isOurs).
+ *                           terminal). Zfilm's own skill for terminal agents is never among them (agent-skills isOurs).
  *   desktop:skills:texts    { project, agent, names } → [{ name, text }]   skills named in a message, as the agent reads
- *                           each (its folder and its SKILL.md whole): any of OpenFilm's but those turned off, an official one
+ *                           each (its folder and its SKILL.md whole): any of Zfilm's but those turned off, an official one
  *                           installed or not (Try now, a skill to start from)
  *   desktop:skills:preview  { url } | { folder } → { ok, id, skills: [{ name, description, scripts, size, replaces }] }
  *                           | { ok: false, error } | { ok: false, cancelled }   a GitHub or GitLab address fetched beside
@@ -19,7 +19,7 @@
  *   desktop:skills:reveal   the person's own skills folder in the file manager
  * For Settings → Agents:
  *   desktop:agents:skills   { id } → { filtered, skills: [{ name, description, allowed }] }   the skills the person
- *                           installed in an agent, each let into OpenFilm or not
+ *                           installed in an agent, each let into Zfilm or not
  *   desktop:skills:allow    { agent, name, allowed } → { ok }   one let in, or not: the agent's sessions take it up
  *   desktop:agents:mcp      { id } → { filtered, servers: [{ name, detail, allowed }] }   the same for MCP servers
  *   desktop:agents:mcp-allow { id, name, allowed } → { ok }
@@ -75,11 +75,11 @@ export function registerSkillsIpc(ipcMain, { trusted, projects, dataDir, mine, p
     if (!trusted(event)) throw new Error('not the window\'s page');
     try { return await fn(opts ?? {}); } catch (e) { log(`${channel}: ${e.message}\n`); throw e; }
   });
-  /* the skills the person installed in the agent (OpenFilm's own for terminal agents never among them) */
+  /* the skills the person installed in the agent (Zfilm's own for terminal agents never among them) */
   const agentOwn = async (agent, cwd) => (agent && agent !== 'byok'
     ? (await ownSkills(agent, { cwd: cwd ?? '', env: await loginShellVariables({ staleOk: true }) })).filter((s) => !s.ours) : []);
 
-  /* OpenFilm's skills for a project as agents are offered them, each by the name it is given by (openfilm/skills offeredSkills) */
+  /* Zfilm's skills for a project as agents are offered them, each by the name it is given by (openfilm/skills offeredSkills) */
   const offered = async (cwd) => (await lib()).offeredSkills({ project: cwd, mine, ...(prefsHome ? { home: prefsHome } : {}) });
 
   handle('desktop:skills:list', async ({ project: path, agent }) => {
@@ -95,15 +95,16 @@ export function registerSkillsIpc(ipcMain, { trusted, projects, dataDir, mine, p
 
   handle('desktop:skills:texts', async ({ project: path, agent, names }) => {
     const cwd = await project(path);
-    const { readSkill, skillText } = await lib();
+    const { asRun, readSkill, skillText } = await lib();
     const wanted = Array.isArray(names) ? names.filter((n) => typeof n === 'string') : [];
-    /* named in the message: any of OpenFilm's but those turned off, an official one installed or not (Try now), by
+    /* named in the message: any of Zfilm's but those turned off, an official one installed or not (Try now), by
        the name the agent knows it by */
     const openfilm = new Map((await offered(cwd)).named.map((s) => [s.as, s]));
     const own = new Map((await agentOwn(agent, cwd)).map((s) => [s.name, s]));
     return wanted.flatMap((name) => {
       const skill = openfilm.get(name) ?? (own.has(name) ? readSkill(own.get(name).folder, 'mine') : null);
-      return skill ? [{ name, text: skillText(skill) }] : [];
+      /* `npx openfilm` (a skill written for a terminal) as the app's `openfilm`, as `openfilm skill` prints it */
+      return skill ? [{ name, text: asRun(skillText(skill), 'openfilm') }] : [];
     });
   });
 
@@ -159,7 +160,7 @@ export function registerSkillsIpc(ipcMain, { trusted, projects, dataDir, mine, p
     return { filtered: FILTERED_AGENTS.includes(agent), skills: (await agentOwn(agent, '')).map((s) => ({ name: s.name, description: s.description, allowed: allowed.has(s.name) })) };
   });
 
-  /* one of OpenFilm's skills turned on or off (Studio's Skills): every agent's sessions take it up */
+  /* one of Zfilm's skills turned on or off (Studio's Skills): every agent's sessions take it up */
   handle('desktop:skills:changed', async () => { refreshSkills(); return { ok: true }; });
 
   handle('desktop:skills:allow', async ({ agent, name, allowed }) => {

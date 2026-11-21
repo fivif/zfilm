@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readLog } from './chat-store.mjs';
@@ -44,6 +44,14 @@ test('the error as the agent sent it, under any rewording on the way; none when 
   const reworded = new Error('Codex stopped while answering without saying why.', { cause: new Error('stream closed', { cause: sent }) });
   assert.deepEqual(sentError(reworded), { code: -32603, message: 'Internal error', data: { details: 'stream closed' } });
   assert.equal(sentError(new Error('not installed')), null);
+});
+
+test('model transport details are present in the desktop diagnostic report', () => {
+  const modelConnection = { host: 'relay.example', phase: 'streaming', status: 200, code: 'UND_ERR_SOCKET', elapsedMs: 3873, retries: 2 };
+  const error = Object.assign(new Error('The connection to the model service was interrupted.'), { code: -32603, data: { modelConnection } });
+  const problem = agentProblem({ agent: 'openfilm', cwd: '/p' }, 'prompt', error);
+  assert.equal(problem.code, 'UND_ERR_SOCKET');
+  assert.ok(problem.what.endsWith(JSON.stringify(modelConnection)));
 });
 
 test("a Copilot turn's model, read once its usage record has reached the file; another agent's turn doesn't wait", async () => {
@@ -105,13 +113,186 @@ setInterval(() => {}, 1000);
   try {
     const agents = registerLocalAgentIpc({ handle: () => {} }, { trusted: () => true });
     const image = { mimeType: 'image/jpeg', data: 'Y2FudmFz' };
-    const streamed = [];
-    const answer = await agents.ask('deepseek', 'Translate: Hello.', undefined, { model: 'b' }, [image], { onText: chunk => streamed.push(chunk) });
+    const answer = await agents.ask('deepseek', 'Translate: Hello.', undefined, { model: 'b' }, [image]);
     assert.deepEqual(JSON.parse(answer), { lines: ['Hallo.'], refused: 'cancelled', model: 'b', images: [{ type: 'image', ...image }] });
-    assert.equal(streamed.join(''), answer, 'the actual ACP reply is streamed to the import log');
     await assert.rejects(agents.ask('nobody', 'hi'), /Unknown agent/);
     assert.equal(agents.lastAgent(), null, 'a question of Studio\'s is not the chat\'s conversation');
   } finally {
+    setChosenPaths({});
+  }
+});
+
+test("a long agent record is read into the turn's model log off the main thread: the app answers meanwhile (#431)", async () => {
+  const { keepAgentRecord } = await import('./local-agents-ipc.mjs');
+  const { claudeProjectName } = await import('./agent-records.mjs');
+  const home = mkdtempSync(join(tmpdir(), 'of-record-'));
+  const cwd = join(home, 'film');
+  mkdirSync(join(cwd, '.film'), { recursive: true });
+  const dir = join(home, 'claude', 'projects', claudeProjectName(cwd));
+  mkdirSync(dir, { recursive: true });
+  /* a turn of many requests, each tool result long: every request carries all of them again */
+  const at = (n) => new Date(Date.UTC(2026, 10, 12, 0, 0, 0, n)).toISOString();
+  const rows = [{ type: 'user', uuid: 'u0', parentUuid: null, timestamp: at(1), message: { role: 'user', content: [{ type: 'text', text: 'Make a film' }] } }];
+  const ROUNDS = 300;
+  for (let i = 0; i < ROUNDS; i += 1) {
+    rows.push({ type: 'assistant', uuid: `r${i}`, parentUuid: rows.at(-1).uuid, timestamp: at(10 + i * 4), requestId: `req${i}`,
+      message: { id: `msg${i}`, model: 'claude-x', role: 'assistant', content: [{ type: 'tool_use', id: `tu${i}`, name: 'Bash', input: { command: 'openfilm look' } }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } } });
+    rows.push({ type: 'user', uuid: `u${i + 1}`, parentUuid: `r${i}`, timestamp: at(12 + i * 4), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `tu${i}`, content: `${i} ${'x'.repeat(40_000)}`, is_error: false }] } });
+  }
+  writeFileSync(join(dir, 'sess-long-1.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  /* the longest the main thread went without a tick while the record was read */
+  let last = performance.now(), longest = 0;
+  const tick = setInterval(() => { const now = performance.now(); longest = Math.max(longest, now - last); last = now; }, 5);
+  const logged = [];
+  try {
+    await keepAgentRecord({ agent: 'claude', sessionId: 'sess-long-1', cwd, turnId: 'local:long1', from: 0, to: Date.now(), settleMs: 0, env: { CLAUDE_CONFIG_DIR: join(home, 'claude') }, log: (line) => logged.push(line) });
+    /* (a tick after it, to count a stretch that ran up to its end) */
+    await new Promise((done) => setTimeout(done, 30));
+  } finally { clearInterval(tick); }
+  assert.deepEqual(logged, []);
+  const { logsDir } = await import('./chat-store.mjs');
+  const { readFileSync } = await import('node:fs');
+  assert.equal(readFileSync(join(logsDir(cwd), 'local-long1.model.jsonl'), 'utf8').trim().split('\n').length, ROUNDS);
+  assert.ok(longest < 250, `the main thread stood still for ${Math.round(longest)} ms`);
+});
+
+test('updates wait for running turns and refuse new starts and prompts while installing', async t => {
+  const { setChosenPaths } = await import('./agents.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'of-updating-'));
+  const program = join(dir, 'dsh.mjs');
+  writeFileSync(program, `let buf='';
+const send = m => process.stdout.write(JSON.stringify(m)+'\\n');
+process.stdin.on('data', d => { buf+=d; let n; while((n=buf.indexOf('\\n'))>=0){
+ const m=JSON.parse(buf.slice(0,n));buf=buf.slice(n+1);let result;
+ if(m.method==='initialize')result={protocolVersion:1,agentCapabilities:{},authMethods:[]};
+ else if(m.method==='session/new')result={sessionId:'s1'};
+ else if(m.method==='session/prompt'){send({jsonrpc:'2.0',method:'session/update',params:{sessionId:'s1',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Ready'}}}});setTimeout(()=>send({jsonrpc:'2.0',id:m.id,result:{stopReason:'end_turn'}}),30);continue;}
+ if(result)send({jsonrpc:'2.0',id:m.id,result});
+}});`);
+  setChosenPaths({ deepseek: program });
+  const handlers = new Map(); let updating = true;
+  const api = registerLocalAgentIpc({ handle: (channel, fn) => handlers.set(channel, fn) }, {
+    trusted: () => true, isAgentUpdating: id => id === 'deepseek' && updating,
+  });
+  t.after(() => { api.closeAll(); setChosenPaths({}); });
+  const event = { sender: { once() {}, isDestroyed: () => false, send() {} } };
+  const start = opts => handlers.get('desktop:local-agents:start')(event, { agent: 'deepseek', cwd: dir, ...opts });
+  assert.equal((await start()).code, 'agent-updating');
+  updating = false;
+  const opened = await start(); assert.equal(opened.ok, true, opened.error);
+  const prompt = () => handlers.get('desktop:local-agents:prompt')(event, { key: opened.key, text: 'hi' });
+  const pending = prompt();
+  assert.equal(api.isAgentBusy('deepseek'), true);
+  assert.equal(api.isAgentBusy('claude'), false);
+  const answer = await pending; assert.equal(answer.ok, true, answer.error);
+  assert.equal(api.isAgentBusy('deepseek'), false);
+  updating = true;
+  assert.equal((await prompt()).code, 'agent-updating');
+  assert.equal(api.isAgentBusy('deepseek'), false, 'a refused turn never starts');
+});
+
+test('an external ACP agent can continue in the same session after a stop', { timeout: 15_000 }, async (t) => {
+  const { setChosenPaths } = await import('./agents.mjs');
+  const cwd = mkdtempSync(join(tmpdir(), 'of-acp-recovery-'));
+  const program = join(cwd, 'dsh.mjs');
+  writeFileSync(program, `
+import { createInterface } from 'node:readline';
+let pending;
+let ignoreCancel = false;
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\\n');
+const answer = (id) => send({ id, result: { stopReason: 'end_turn' } });
+for await (const line of createInterface({ input: process.stdin })) {
+  const { id, method, params } = JSON.parse(line);
+  if (method === 'initialize') send({ id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {} } }, authMethods: [] } });
+  if (method === 'session/new') send({ id, result: { sessionId: 's1' } });
+  if (method === 'session/resume') send({ id, result: {} });
+  if (method === 'session/prompt') {
+    const text = params.prompt.map(({ text }) => text).join('\\n');
+    send({ method: 'session/update', params: { sessionId: params.sessionId, update: {
+      sessionUpdate: 'agent_message_chunk', content: { type: 'text', text },
+    } } });
+    if (text.includes('Continue the interrupted task') || text.includes('Resume using the handoff record')) answer(id);
+    else { pending = id; ignoreCancel = text.includes('Hold through cancellation'); }
+  }
+  if (method === 'session/cancel' && pending != null && !ignoreCancel) answer(pending);
+}
+`);
+  setChosenPaths({ deepseek: program });
+  const handlers = new Map();
+  const api = registerLocalAgentIpc({ handle: (channel, fn) => handlers.set(channel, fn) }, { trusted: () => true });
+  t.after(() => { api.closeAll(); setChosenPaths({}); });
+  const messages = [];
+  let first;
+  const started = new Promise((resolve) => { first = resolve; });
+  const event = { sender: { once() {}, isDestroyed: () => false, send(_channel, data) {
+    if (data.update?.sessionUpdate !== 'agent_message_chunk') return;
+    messages.push(data.update.content.text);
+    first();
+  } } };
+  const request = (method, opts) => handlers.get(`desktop:local-agents:${method}`)(event, opts);
+  const { key } = await request('start', { agent: 'deepseek', cwd });
+  assert.ok(key);
+  const meta = { turnId: 'local:resume1' };
+  const pending = request('prompt', { key, meta, text: 'Original request' });
+  await started;
+  await request('cancel', { key, turnId: meta.turnId });
+  assert.equal((await pending).stopReason, 'cancelled', 'the stop is kept even if the adapter reports end_turn');
+  assert.equal((await request('prompt', { key, meta: { ...meta, recovery: true }, text: 'Saved partial answer' })).stopReason, 'end_turn');
+  assert.match(messages.at(-1), /Continue the interrupted task[\s\S]*Saved partial answer/);
+  const stuck = { turnId: 'local:resume2' };
+  const unfinished = request('prompt', { key, meta: stuck, text: 'Hold through cancellation' });
+  await request('cancel', { key, turnId: stuck.turnId });
+  assert.equal((await request('running'))[0].stopping, true);
+  assert.deepEqual(await unfinished, { ok: true, stopReason: 'cancelled', sessionClosed: true });
+  const reopened = await request('start', { agent: 'deepseek', cwd, resume: 's1' });
+  assert.ok(reopened.info?.resumed);
+  assert.notEqual(reopened.key, key);
+  assert.equal((await request('prompt', { key: reopened.key, meta: { ...stuck, recovery: true }, text: 'Saved reply' })).stopReason, 'end_turn');
+  const handoff = 'Resume using the handoff record';
+  assert.equal((await request('prompt', { key: reopened.key, meta: { ...stuck, recovery: true, handoff: true }, text: handoff })).stopReason, 'end_turn');
+  assert.equal(messages.at(-1), handoff, 'the receiving agent gets the handoff as a prompt in its own session');
+});
+
+test("a project folder about to be renamed: the chat's sessions between turns in it close and their processes end, others stay", async () => {
+  /* DeepSeek Harness as a fake over ACP that only opens a session */
+  const { setChosenPaths } = await import('./agents.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'of-release-'));
+  const program = join(dir, 'dsh.mjs');
+  writeFileSync(program, `let buf = '';
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+process.stdin.on('data', (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
+    if (m.method === 'initialize') send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } });
+    else if (m.method === 'session/new') send({ jsonrpc: '2.0', id: m.id, result: { sessionId: 's1' } });
+    else if (m.id != null && m.method) send({ jsonrpc: '2.0', id: m.id, result: {} });
+  }
+});
+setInterval(() => {}, 1000);
+`);
+  setChosenPaths({ deepseek: program });
+  const handlers = new Map();
+  const agents = registerLocalAgentIpc({ handle: (channel, fn) => handlers.set(channel, fn) }, { trusted: () => true });
+  const event = { sender: { once() {}, isDestroyed: () => false, send() {} } };
+  const project = join(dir, 'Untitled');
+  const other = join(dir, 'Other');
+  mkdirSync(project);
+  mkdirSync(other);
+  try {
+    const here = await handlers.get('desktop:local-agents:start')(event, { agent: 'deepseek', cwd: project });
+    const there = await handlers.get('desktop:local-agents:start')(event, { agent: 'deepseek', cwd: other });
+    assert.ok(here.ok && there.ok, here.error ?? there.error);
+    await agents.release(project);
+    assert.match((await handlers.get('desktop:local-agents:prompt')(event, { key: here.key, text: 'hi' })).error, /ended/);
+    /* nothing of the app's works in the folder any more: it can be renamed (Windows refused while the agent ran) */
+    renameSync(project, join(dir, 'My Film'));
+    /* the session in another folder is not let go of */
+    assert.equal((await handlers.get('desktop:local-agents:prompt')(event, { key: there.key, text: 'hi' })).ok, true);
+    handlers.get('desktop:local-agents:close')(event, { key: there.key });
+  } finally {
+    agents.closeAll();
     setChosenPaths({});
   }
 });

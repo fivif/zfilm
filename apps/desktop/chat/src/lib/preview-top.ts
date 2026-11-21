@@ -1,7 +1,7 @@
 /**
  * Where the lightbox (PreviewFrame) starts at the top of the window. On Windows the window's own buttons are drawn
  * over the page's top right (src/main.mjs, `titleBarOverlay`), above anything the page draws: the lightbox starts
- * below them, so its close button is never under the window's, which quits OpenFilm.
+ * below them, so its close button is never under the window's, which quits Zfilm.
  *
  * Pure: no React, no bridge, so `node --test` runs it (src/preview-top.test.mjs).
  */

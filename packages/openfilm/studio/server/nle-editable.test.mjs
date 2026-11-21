@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planNleTimeline } from './nle.mjs';
+import { plainFootageCss, planNleTimeline } from './nle.mjs';
 import { jianyingDraft } from './jianying.mjs';
 
 const facts = { w: 320, h: 180, duration: 12, fps: 30, hasVideo: true, hasAudio: true, channels: 2, sampleRate: 48000 };
@@ -9,6 +9,17 @@ const sound = { id: 'shot', src: 'shot.mp4', path: '/p/shot.mp4', at: 1, from: 2
 const plan = (p = {}, s = {}) => planNleTimeline({ stage: { w: 320, h: 180 }, duration: 4,
   pictures: [{ ...picture, ...p }], sounds: [{ ...sound, ...s }],
 }, { title: 'Editable', fps: 30, audio: 'clips', media: 'copy', mediaDir: '/draft/media', editable: true });
+
+test('only direct static neutral class CSS can reuse opaque footage', () => {
+  const clip = { id: 'shot', class: 'bgfit full', style: 'object-fit:cover' };
+  const css = '<style>html,body{margin:0;background:#000}iframe{border:0;display:block}.bgfit{object-fit:cover}.full{background:#000}.pip{border-radius:50%;box-shadow:0 5px 10px #000}</style>';
+  assert.equal(plainFootageCss(css, clip), true);
+  for (const extra of ['<script>window.update=()=>{}</script>', '<link rel="stylesheet" href="other.css">',
+    '<style>@media(min-width:1px){.full{filter:blur(2px)}}</style>', '<style>.full:hover{opacity:.5}</style>',
+    '<style>.full{filter:blur(2px)}</style>', '<style>body{opacity:.5}</style>', '<style>.full{animation:spin 1s}</style>',
+    '<style>.full{object-view-box:inset(10%)}</style>', '<body style="filter:blur(2px)">', '<style>section{filter:blur(2px)}</style>']) assert.equal(plainFootageCss(css + extra, clip), false, extra);
+  assert.equal(plainFootageCss(css, { ...clip, class: 'bgfit pip' }), false);
+});
 
 test('a draft keeps the complete video and its native speed, source handles and own sound', () => {
   const timeline = plan();
@@ -41,4 +52,19 @@ test('a processed video has full-length handles and its untouched original in th
   const { info, meta } = jianyingDraft(timeline, { name: 'Editable', folder: '/draft', root: '/' });
   assert.equal(meta.draft_materials[0].value.length, timeline.files.length);
   assert.ok(info.materials.videos.some((m) => m.path.endsWith('shot.mp4') && m.duration === 12_000_000));
+});
+
+test('a talking head filling the frame stays one clip with its own sound', () => {
+  const head = { w: 144, h: 320, duration: 4, fps: 30, hasVideo: true, hasAudio: true, channels: 2, sampleRate: 48000 };
+  const timeline = planNleTimeline({ stage: { w: 180, h: 320 }, duration: 4,
+    pictures: [{ ...picture, src: 'talk.mp4', path: '/p/talk.mp4', at: 0, end: 4, from: 0, speed: 1, facts: head, fit: 'cover', position: '50% 50%' }],
+    sounds: [{ ...sound, src: 'talk.mp4', path: '/p/talk.mp4', at: 0, from: 0, to: 4, speed: 1, volume: 1, facts: head }],
+  }, { title: 'Head', fps: 30, audio: 'clips', media: 'copy', mediaDir: '/draft/media', editable: true, footage: 'auto' });
+  assert.ok(!timeline.files.some((f) => f.job.kind === 'render'));
+  const { info } = jianyingDraft(timeline, { name: 'Head', folder: '/draft', root: '/' });
+  assert.deepEqual(info.tracks.map((t) => t.type), ['video']);
+  const [segment] = info.tracks[0].segments;
+  assert.equal(segment.volume, 1);
+  /* 剪映 fits it whole first (320 px high), then fills: 180 / 144 */
+  assert.equal(segment.clip.scale.x, 1.25);
 });

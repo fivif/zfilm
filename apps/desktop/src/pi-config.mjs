@@ -7,6 +7,7 @@
  *
  * Reads no Electron module, so `node --test` can use it.
  */
+import { createHash } from 'node:crypto';
 
 /** The person's own key's API, as Pi names it. */
 export const PI_APIS = Object.freeze({ chat: 'openai-completions', responses: 'openai-responses', anthropic: 'anthropic-messages' });
@@ -14,7 +15,7 @@ export const PI_APIS = Object.freeze({ chat: 'openai-completions', responses: 'o
 /**
  * The reasoning efforts a model of the person's own can offer, in order: `auto` sends no reasoning setting (the
  * service decides, as it always did), the others are Pi's thinking levels. Which of them a model offers is the
- * person's to say in Settings (OpenFilm cannot know what a service's model takes); a model they said nothing of offers
+ * person's to say in Settings (Zfilm cannot know what a service's model takes); a model they said nothing of offers
  * `auto` alone.
  */
 export const EFFORTS = Object.freeze(['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
@@ -42,61 +43,79 @@ const CONTEXT = 128_000;
 const MAX_OUTPUT = 32_000;
 
 /**
- * The pictures one request carries at most (their base64, bytes): 32 MB, the request size Anthropic's API documents
- * as its limit. Pi makes each picture at most 2000 px and 4.5 MB as it reads it (its defaults), so
- * a frame keeps its full quality; but every picture goes again with each request after it, and the context's token
- * count hardly sees a picture's bytes, so nothing else keeps a conversation that looks at many frames under a service's
- * size limit. Past this, the oldest are left out of the request (never out of the conversation).
+ * The desktop's request-size guard, including base64 pictures. Gateways may accept less than the model's own API;
+ * a 413 lowers the session's picture budget. Leave room for the provider's envelope and tool serialization too.
  */
 export const IMAGE_BUDGET = 32 * 1024 * 1024;
+const REQUEST_HEADROOM = 1024 * 1024;
 /** A model service refusing a request as too large: HTTP 413, as services and the proxies before them say it. */
 export const TOO_LARGE = /^\s*413\b|request entity too large|payload too large|request_too_large|request too large/i;
 
 /**
- * The tool results whose pictures a request carries: the latest few that hold one. An older one's pictures are left out
- * of the request; the agent reads a file again when it needs to look back.
- */
-export const KEEP_PICTURE_RESULTS = 5;
-
-/**
- * The conversation as one request sends it: pictures only in the latest KEEP_PICTURE_RESULTS tool results that hold
- * one, and all of them within `budget` (bytes of base64), the newest kept. Each picture left out is a line saying so
- * and which file it was, so the agent can read it again. `messages` the same when nothing is left out; `kept`, the
- * bytes of the pictures that go.
+ * Claude Code's published strategy: leave history intact until a request exceeds a size/count limit, then remove
+ * a batch of the oldest pictures with room for more. https://code.claude.com/docs/en/prompt-caching#accumulating-many-images
+ * `omitted` identifies occurrences, not files: rereading the same file adds a new picture. Persist these keys in Pi's
+ * custom session entries so an omitted picture stays omitted across requests, compaction and session restoration.
+ * The original conversation and files remain intact. Pi owns token-based compaction.
  * @param {any[]} messages @param {number} budget
- * @returns {{ messages: any[], kept: number }}
+ * @param {{ omitted?: Set<string>, maxImages?: number, maxRequestBytes?: number, headroom?: number }} options
  */
-export function fitImages(messages, budget) {
+export function fitImages(messages, budget, { omitted = new Set(), maxImages = 100, maxRequestBytes = IMAGE_BUDGET, headroom = 0.5 } = {}) {
   /* which file each tool call read, to name a picture left out */
   const paths = new Map();
   for (const m of messages) {
     if (m?.role !== 'assistant' || !Array.isArray(m.content)) continue;
     for (const c of m.content) if (c?.type === 'toolCall' && typeof c.arguments?.path === 'string') paths.set(c.id, c.arguments.path);
   }
-  let used = 0;
-  let cut = false;
-  let results = 0;
-  const out = [...messages];
-  for (let i = out.length - 1; i >= 0; i--) {
-    const m = out[i];
+  const pictures = [];
+  const byMessage = new Map();
+  for (const m of messages) {
     if (!Array.isArray(m?.content) || !m.content.some((c) => c?.type === 'image')) continue;
-    const old = m.role === 'toolResult' && ++results > KEEP_PICTURE_RESULTS;
-    const content = m.content.map((c) => {
-      if (c?.type !== 'image') return c;
-      const size = String(c.data ?? '').length;
-      if (!old && used + size <= budget) { used += size; return c; }
-      cut = true;
-      const path = m.role === 'toolResult' ? paths.get(m.toolCallId) : undefined;
-      return { type: 'text', text: `[A picture${path ? ` (${path})` : ''} was left out of this request to keep it small. Read it again to see it.]` };
-    });
-    out[i] = { ...m, content };
+    const blocks = new Map();
+    byMessage.set(m, blocks);
+    const identity = m.toolCallId ?? `${m.timestamp ?? 0}:${createHash('sha256').update(JSON.stringify(m.content)).digest('hex')}`;
+    for (let i = 0; i < m.content.length; i++) {
+      const block = m.content[i];
+      if (block.type !== 'image') continue;
+      const picture = { key: `${m.role}:${identity}:${i}`, size: String(block.data ?? '').length };
+      pictures.push(picture);
+      blocks.set(i, picture);
+    }
   }
-  return { messages: cut ? out : messages, kept: used };
+  // Count text/tools without copying every historical base64 payload, including already omitted pictures.
+  const textBytes = Buffer.byteLength(JSON.stringify(messages, (_key, value) => value?.type === 'image' && typeof value.data === 'string'
+    ? { ...value, data: '' } : value));
+  const byteLimit = Math.max(0, Math.min(budget, maxRequestBytes - textBytes - REQUEST_HEADROOM));
+  const remaining = pictures.filter((p) => !omitted.has(p.key));
+  let kept = remaining.reduce((n, p) => n + p.size, 0);
+  let count = remaining.length;
+  const reason = kept > byteLimit ? 'bytes' : count > maxImages ? 'count' : null;
+  const pruned = [];
+  if (reason) {
+    for (const picture of remaining) {
+      if (kept <= byteLimit * headroom && count <= Math.floor(maxImages * headroom)) break;
+      if (count === 1 && kept <= byteLimit && count <= maxImages) break;
+      omitted.add(picture.key);
+      pruned.push(picture.key);
+      kept -= picture.size;
+      count--;
+    }
+  }
+  const removed = pictures.length - count;
+  const out = removed ? messages.map((m) => {
+    const blocks = byMessage.get(m);
+    if (!blocks || ![...blocks.values()].some((p) => omitted.has(p.key))) return m;
+    const path = m.role === 'toolResult' ? paths.get(m.toolCallId) : undefined;
+    return { ...m, content: m.content.map((b, i) => b.type === 'image' && omitted.has(blocks.get(i).key)
+      ? { type: 'text', text: `[A picture${path ? ` (${path})` : ''} was left out of this request to keep it small. Read it again to see it.]` }
+      : b) };
+  }) : messages;
+  return { messages: out, kept, removed, pruned, reason };
 }
 
 /**
  * A model's context length as kept: a whole number of tokens from 32K to 10M, as the person gave it in Settings (the
- * service documents it; OpenFilm cannot know it). Null for none or anything else: the model gets 128K.
+ * service documents it; Zfilm cannot know it). Null for none or anything else: the model gets 128K.
  */
 export function contextLength(/** @type {unknown} */ value) {
   return typeof value === 'number' && Number.isInteger(value) && value >= 32_000 && value <= 10_000_000 ? value : null;
@@ -164,12 +183,23 @@ export function effortOption(/** @type {string[]} */ levels, /** @type {string} 
     options: levels.map((l) => ({ value: l, name: EFFORT_NAMES[/** @type {keyof typeof EFFORT_NAMES} */ (l)] ?? l })) };
 }
 
+/**
+ * Pi's tools for the app's own agent. Its commands run in PowerShell on Windows: Pi's `bash` there needs Git Bash,
+ * which most people do not have, and failed every command without it. PowerShell comes with Windows.
+ */
+export function agentTools(platform = process.platform) {
+  return ['read', platform === 'win32' ? 'powershell' : 'bash', 'edit', 'write', 'ask'];
+}
+
 /** A tool call as the chat reads it (ACP): its kind, its title, and what it was run with. */
-export function toolCall(name, args) {
+export function toolCall(name, args, connectorLabels) {
   const a = args && typeof args === 'object' ? args : {};
+  /* a connector's tool (pi-connectors.mjs): its service and its own title */
+  const connector = connectorLabels?.get(name);
+  if (connector) return { kind: connector.readOnly ? 'fetch' : 'other', title: connector.title, rawInput: a };
   const path = typeof a.path === 'string' ? a.path : typeof a.file_path === 'string' ? a.file_path : '';
   switch (name) {
-    case 'bash': return { kind: 'execute', title: String(a.command ?? 'bash'), rawInput: { command: String(a.command ?? '') } };
+    case 'bash': case 'powershell': return { kind: 'execute', title: String(a.command ?? name), rawInput: { command: String(a.command ?? '') } };
     case 'read': return { kind: 'read', title: `Read ${path}`, rawInput: { path } };
     case 'edit': return { kind: 'edit', title: `Edit ${path}`, rawInput: { path } };
     case 'write': return { kind: 'edit', title: `Write ${path}`, rawInput: { path } };
@@ -191,13 +221,13 @@ export function toolContent(result) {
  * How a run ended, as ACP says it, from Pi's last answer; an error is thrown (the chat shows it), in plain words
  * (`failureText`), with Pi's own words as its `details`.
  */
-export function stopReason(message) {
+export function stopReason(message, modelConnection = null) {
   switch (message?.stopReason) {
     case 'length': return 'max_tokens';
     case 'aborted': return 'cancelled';
     case 'error': {
       const said = String(message.errorMessage || 'The model did not answer.');
-      throw Object.assign(new Error(failureText(said)), { details: said });
+      throw Object.assign(new Error(failureText(said)), { details: said, ...(modelConnection ? { modelConnection } : {}) });
     }
     default: return 'end_turn';
   }
@@ -208,6 +238,14 @@ export const WAIT_MINUTES = 15;
 
 /* what the model service's client says when no answer came in time */
 const TIMED_OUT = /request timed out|headers timeout|body timeout/i;
+const GATEWAY_TIMEOUT = /^\s*(?:504|524)\b|origin_response_timeout|upstream_timeout|timed out waiting for Volcengine|error 524: a timeout occurred/i;
+const GATEWAY_TIMEOUT_HINT = 'The model service took too long to respond. Try again or switch models.';
+const CONNECTION_LOST = /^(?:connection error|network error|fetch failed|terminated|socket hang up)\.?$|^(?:read )?ECONNRESET\b|^other side closed\b/i;
+const CONNECTION_LOST_HINT = 'The connection to the model service was interrupted. Continue to pick up this task.';
+
+export function isModelConnectionError(said) {
+  return CONNECTION_LOST.test(String(said ?? '').trim());
+}
 /* a conversation longer than the model takes: as Pi says it, then as services commonly do */
 const PI_OVERFLOW = /^context overflow recovery failed/i;
 const OVERFLOW = /context (?:length|window|size)|prompt (?:is )?too long/i;
@@ -216,7 +254,9 @@ const CONTEXT_HINT = "The model's context may be smaller than set in Settings: l
 /** Why a turn failed, in plain words where Pi's own are technical; anything else as Pi said it. */
 export function failureText(said) {
   const text = String(said ?? '').trim();
-  if (TIMED_OUT.test(text)) return `The model service didn't answer for ${WAIT_MINUTES} minutes, even after trying again. Check that the service is running and reachable, then try again.`;
+  if (GATEWAY_TIMEOUT.test(text)) return GATEWAY_TIMEOUT_HINT;
+  if (TIMED_OUT.test(text)) return 'The model request timed out. Check the connection to the service, then try again.';
+  if (isModelConnectionError(text)) return CONNECTION_LOST_HINT;
   if (PI_OVERFLOW.test(text)) return `${text} ${CONTEXT_HINT}`;
   if (OVERFLOW.test(text)) return `The conversation is too long for the model. ${CONTEXT_HINT}`;
   if (TOO_LARGE.test(text)) return 'The request is too large for the model service, even with older pictures left out. Send your message again to go on with fewer, or start a new conversation.';
@@ -230,8 +270,10 @@ export function failureText(said) {
 export function retryNotice(event) {
   const said = String(event?.errorMessage ?? '').trim();
   const again = `trying again (${event?.attempt ?? 1} of ${event?.maxAttempts ?? 1}).`;
+  if (isModelConnectionError(said)) return { sessionUpdate: 'notice', severity: 'warning', title: `Connection to the model service was interrupted; ${again}`, _meta: { openfilm: { noticeKey: 'composer.modelConnectionRetry' } } };
+  if (GATEWAY_TIMEOUT.test(said)) return { sessionUpdate: 'notice', severity: 'warning', title: `The model service took too long to respond; ${again}`, _meta: { openfilm: { noticeKey: 'composer.modelTimeoutRetry' } } };
   if (TOO_LARGE.test(said)) return { sessionUpdate: 'notice', severity: 'warning', title: `The request was too large for the model service; ${again.replace(/\.$/, '')} with half of the older pictures left out.` };
-  if (TIMED_OUT.test(said)) return { sessionUpdate: 'notice', severity: 'warning', title: `The model service didn't answer for ${WAIT_MINUTES} minutes; ${again}` };
+  if (TIMED_OUT.test(said)) return { sessionUpdate: 'notice', severity: 'warning', title: `The model request timed out; ${again}`, description: said };
   return { sessionUpdate: 'notice', severity: 'warning', title: `The model service failed; ${again}`, ...(said ? { description: said } : {}) };
 }
 
@@ -244,7 +286,7 @@ export function contextUsed(message, model) {
 
 /** Where each service the person's own key may be for is topped up, by its address. */
 const BILLING = [
-  { host: /(^|\.)openfilm\.dev$/, name: 'OpenFilm', url: 'https://openfilm.dev/account' },
+  { host: /(^|\.)openfilm\.dev$/, name: 'Zfilm', url: 'https://openfilm.dev/account' },
   { host: /(^|\.)openai\.com$/, name: 'OpenAI', url: 'https://platform.openai.com/settings/organization/billing' },
   { host: /(^|\.)anthropic\.com$/, name: 'Anthropic', url: 'https://console.anthropic.com/settings/billing' },
   { host: /(^|\.)openrouter\.ai$/, name: 'OpenRouter', url: 'https://openrouter.ai/settings/credits' },

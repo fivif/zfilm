@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { builtInRoot, libraryFavorites, libraryFile, libraryIndex, libraryVoices, setLibraryFavorites, voiceKey } from './library.mjs';
@@ -111,9 +111,49 @@ test('the starred things are kept in the shared prefs, those of the library only
   }
 });
 
+test('installed and discoverable skills can both be starred and unstarred in shared preferences', () => {
+  const home = mkdtempSync(join(tmpdir(), 'of-skill-stars-'));
+  const was = process.env.OPENFILM_SHARED_HOME;
+  process.env.OPENFILM_SHARED_HOME = home;
+  try {
+    const installed = 'skill:openfilm/film';
+    const discover = 'skill:community/preview';
+    assert.deepEqual(setLibraryFavorites([installed, discover, discover, 'skill:../preview']), [installed, discover]);
+    assert.deepEqual(libraryFavorites(), [installed, discover]);
+    assert.deepEqual(setLibraryFavorites([discover]), [discover]);
+    assert.deepEqual(libraryFavorites(), [discover]);
+    assert.deepEqual(setLibraryFavorites([]), []);
+    assert.deepEqual(libraryFavorites(), []);
+  } finally {
+    if (was === undefined) delete process.env.OPENFILM_SHARED_HOME; else process.env.OPENFILM_SHARED_HOME = was;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('skill favorites survive saving and reading without a catalog or the project that owns them', () => {
+  const before = process.env.OPENFILM_SHARED_HOME;
+  const home = mkdtempSync(join(tmpdir(), 'of-skill-favorites-'));
+  process.env.OPENFILM_SHARED_HOME = home;
+  try {
+    const ids = ['skill:river/remake', 'skill:openfilm/remake', 'skill:local/my-style', 'skill:project/my-style', 'effects/snow'];
+    const invalid = ['skill:remake', 'skill:../remake', 'skill:river/remake/extra', 'skill:River/remake', 'skill:/remake', `skill:river/${'a'.repeat(65)}`, 'nope/none', null, 7];
+    assert.deepEqual(setLibraryFavorites([...ids, ids[0], ...invalid]), ids);
+    assert.deepEqual(libraryFavorites(), ids);
+    assert.deepEqual(JSON.parse(readFileSync(join(home, 'prefs.json'), 'utf8')).libraryFavorites, ids);
+    // Older or edited preferences pass the same validation on read.
+    writeFileSync(join(home, 'prefs.json'), JSON.stringify({ libraryFavorites: [...ids, ids[0], ...invalid] }));
+    assert.deepEqual(libraryFavorites(), ids);
+    assert.deepEqual(setLibraryFavorites(ids.slice(1)), ids.slice(1));
+    assert.deepEqual(libraryFavorites(), ids.slice(1), 'removing one owner leaves the other skill of the same name');
+  } finally {
+    if (before === undefined) delete process.env.OPENFILM_SHARED_HOME; else process.env.OPENFILM_SHARED_HOME = before;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('the voices are the voice-over services\' own, each once, said as `openfilm get tts` takes them; a star can be on one', async () => {
   const { providers, voices } = /** @type {{ providers: any[], voices: any[] }} */ (libraryVoices());
-  assert.deepEqual(providers.map((p) => p.id), ['elevenlabs', 'inworld', 'cartesia']);
+  assert.deepEqual(providers.map((p) => p.id), ['elevenlabs', 'inworld', 'cartesia', 'doubao']);
   assert.ok(providers.every((p) => p.models.length && p.models.every((/** @type {any} */ m) => m.id && m.name)));
   const seen = new Set();
   for (const v of voices) {
@@ -126,7 +166,7 @@ test('the voices are the voice-over services\' own, each once, said as `openfilm
     assert.ok(Array.isArray(v.tags));
     assert.equal(typeof v.featured, 'boolean', `${key}: featured or not`);
     assert.ok(v.uses === null || v.uses >= 0, `${key}: uses`);
-    if (v.sample) assert.match(v.sample, new RegExp(`^voices/${v.provider}/[\\w.-]+\\.m4a$`));
+    if (v.sample) assert.match(v.sample, new RegExp(`^voices/${v.provider}/[\\w.-]+\\.${v.provider === 'doubao' ? '(mp3|wav|m4a)' : 'm4a'}$`));
   }
   for (const p of providers) assert.ok(voices.some((v) => v.provider === p.id), `${p.id} has voices`);
   /* ElevenLabs: its own voices and its library's featured ones, picked, first */

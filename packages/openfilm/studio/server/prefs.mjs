@@ -27,7 +27,7 @@ import { chooseFolder, chosenFolder } from '../../src/locations.mjs';
 /** Proxies on by default, at 720p; versions saved by the person only, and only theirs listed. */
 export const DEFAULT_PREFS = /** @type {Prefs} */ ({ proxies: { on: true, height: 720 }, seenVersion: null, projectsFolder: null, keys: null, autoVersions: false, showAutoVersions: false, libraryCategories: null });
 const VERSION = /^\d+\.\d+\.\d+(?:-[\w.]+)?$/;
-const HEIGHTS = [540, 720, 1080];
+export const PROXY_HEIGHTS = [540, 720, 1080];
 
 const NAME = /^[\w-]{1,40}$/;
 const SLOTS = ['custom1', 'custom2', 'custom3'];
@@ -58,7 +58,8 @@ export function keysOf(raw) {
   return { scheme: k.scheme, custom };
 }
 
-const CATEGORY = /^[a-z]{1,20}$/;
+/* a category's name: the library's own (`text`), or the id of a plugin that brings a tab (`captions`, `owner/name`) */
+const CATEGORY = /^[a-z0-9][a-z0-9-]{0,63}(\/[a-z0-9][a-z0-9-]{0,63})?$/;
 /**
  * The library's categories as arranged, in shape: names only, each once, at most 40; null when there is no order.
  * @param {unknown} raw @returns {LibraryCategories | null}
@@ -78,7 +79,7 @@ export function prefsOf(raw) {
   return {
     proxies: {
       on: typeof p?.proxies?.on === 'boolean' ? p.proxies.on : DEFAULT_PREFS.proxies.on,
-      height: /** @type {540 | 720 | 1080} */ (HEIGHTS.includes(height) ? height : DEFAULT_PREFS.proxies.height),
+      height: /** @type {540 | 720 | 1080} */ (PROXY_HEIGHTS.includes(height) ? height : DEFAULT_PREFS.proxies.height),
     },
     seenVersion: typeof p?.seenVersion === 'string' && VERSION.test(p.seenVersion) ? p.seenVersion : null,
     projectsFolder: folder(p?.projectsFolder),

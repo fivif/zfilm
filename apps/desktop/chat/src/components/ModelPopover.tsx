@@ -19,6 +19,7 @@ import { keepFocus, Popover } from './Popover';
 import { useT } from '@/i18n';
 import { Tooltip } from '@/components/Tooltip';
 import { AgentIcon } from '@/components/AgentIcons';
+import { BrandLogo } from '@/components/BrandLogo';
 import { POPOVER_CHROME } from '@/components/ComposerCard';
 import { desktopBridge, type LocalAgentId, type RosterAgent } from '@/lib/desktop-bridge';
 import { agentModelSummary, agentOptions, currentAgent, effectivePrefs, offeredChoices, offeredOption, optionLabel, optionValue, shownAgents, useLocalAgents } from '@/state/local-agent-store';
@@ -40,6 +41,15 @@ const ROW_BASE =
   'flex min-h-[28px] w-full items-center gap-2 rounded-[6px] px-2.5 text-[13px] font-normal tracking-normal text-left outline-none transition';
 const ROW = `${ROW_BASE} hover:bg-[var(--bg-hover)] focus-visible:bg-[var(--bg-hover)]`;
 
+/** The monochrome mark for each model provider. */
+const MODEL_PROVIDER_ICONS = new Map<string, React.ReactNode>([
+  ['anthropic', <AgentIcon id="claude" size={14} />],
+  ['openai', <AgentIcon id="codex" size={14} />],
+  ['google', <AgentIcon id="gemini" size={14} />],
+  ['tencent', <AgentIcon id="hunyuan" size={14} />],
+  ['deepseek', <AgentIcon id="deepseek" size={14} />],
+]);
+
 type Option = MenuOption;
 
 /** A row's choices: those the agent offers there, or its one value when that is all it has (a "default" too). */
@@ -55,37 +65,37 @@ function failureReason(error: { text: string } | undefined): string | null {
 }
 
 export function ChatAgentIcon({ id, size = 14 }: { id: LocalAgentId; size?: number }) {
+  if (id === 'openfilm') return <BrandLogo size={size} />;
   if (id === 'byok') return <KeyRound size={size} />;
   return <AgentIcon id={id} size={size} />;
 }
 
-export function CanvasModelPicker({ triggerClassName }: { triggerClassName?: string }) {
-  return <div className="of-chat min-w-0" data-canvas-writing-model=""><ModelPopover placement="top" triggerClassName={triggerClassName} /></div>;
+export function CanvasModelPicker({ triggerClassName, isolated, onSelection }: {
+  triggerClassName?: string;
+  isolated?: boolean;
+  onSelection?: (model: ReturnType<typeof canvasWritingModel>) => void;
+}) {
+  return <div className="of-chat min-w-0" data-canvas-writing-model="">
+    {isolated ? <IsolatedModelPicker triggerClassName={triggerClassName} onSelection={onSelection} />
+      : <ModelPopover placement="top" triggerClassName={triggerClassName} />}
+  </div>;
 }
 
-export function canvasWritingModel() {
-  const state = useLocalAgents.getState();
-  const agent = currentAgent(state);
-  return selectedModel(agent, state.prefs);
-}
-
+/** The agent and options the conversation on screen uses: what a folder import asks, so it runs as the chat would. */
 type AgentPrefs = ReturnType<typeof useLocalAgents.getState>['prefs'];
 let libraryContext: { agent: LocalAgentId; prefs: AgentPrefs } | null = null;
 export function setLibraryAgentContext(context: typeof libraryContext) { libraryContext = context; }
-export function libraryImportModel() {
+export function libraryAgentContext() { return libraryContext; }
+
+export function canvasWritingModel() {
   const state = useLocalAgents.getState();
-  const agent = libraryContext?.agent ?? currentAgent(state);
-  if (agent !== 'byok' && !state.options[agent] && state.optionsError[agent]?.text !== 'no options') {
-    void state.ensureOptions(agent);
-    return null;
-  }
-  return selectedModel(agent, libraryContext?.prefs ?? state.prefs);
+  return writingModel(state, currentAgent(state), state.prefs);
 }
-function selectedModel(agent: LocalAgentId, preferences: AgentPrefs) {
-  const state = useLocalAgents.getState();
+
+function writingModel(state: ReturnType<typeof useLocalAgents.getState>, agent: LocalAgentId, chosen: Parameters<typeof effectivePrefs>[0]) {
   if (!shownAgents(state.roster).some((entry) => entry.id === agent && entry.status === 'ready')) return null;
-  const options = agentOptions({ ...state, prefs: preferences }, agent);
-  const prefs = effectivePrefs(preferences, agent, state.roster, options);
+  const options = agentOptions({ ...state, prefs: chosen }, agent);
+  const prefs = effectivePrefs(chosen, agent, state.roster, options);
   const picked: Record<string, string | number | boolean> = {};
   for (const option of menuOptions(options, '').filter((row) => offeredOption(agent, state.roster, row))) {
     const value = optionValue(options, prefs, option.id);
@@ -94,11 +104,25 @@ function selectedModel(agent: LocalAgentId, preferences: AgentPrefs) {
   return { agent, options: picked };
 }
 
+function IsolatedModelPicker({ triggerClassName, onSelection }: {
+  triggerClassName?: string;
+  onSelection?: (model: ReturnType<typeof canvasWritingModel>) => void;
+}) {
+  const state = useLocalAgents();
+  const [picked, setPicked] = React.useState<LocalAgentId | undefined>();
+  const [prefs, setPrefs] = React.useState<typeof state.prefs>(() => state.prefs);
+  const agent = picked ?? currentAgent(state);
+  const selection = JSON.stringify(writingModel(state, agent, prefs));
+  React.useEffect(() => { onSelection?.(JSON.parse(selection)); }, [onSelection, selection]);
+  return <ModelPopover placement="top" triggerClassName={triggerClassName} agent={agent} prefs={prefs} isolated
+    onPick={setPicked} onPref={(id, option, value) => setPrefs((was) => ({ ...was, [id]: { ...was[id], [option]: value } }))} />;
+}
+
 /**
  * The composer's agent menu. In a conversation, `agent` and `prefs` are the ones it goes on with (lib/conversation-agent),
  * and `onPick` and `onPref` keep a change on it too; without them, the agent and options picked last.
  */
-export function ModelPopover({ placement = 'bottom', align = 'start', agent: conversationAgent, prefs: conversationPrefs, onPick, onPref, triggerClassName }: {
+export function ModelPopover({ placement = 'bottom', align = 'start', agent: conversationAgent, prefs: conversationPrefs, onPick, onPref, triggerClassName, isolated }: {
   placement?: 'top' | 'bottom';
   align?: 'start' | 'end';
   triggerClassName?: string;
@@ -106,6 +130,7 @@ export function ModelPopover({ placement = 'bottom', align = 'start', agent: con
   prefs?: Partial<Record<LocalAgentId, Record<string, unknown>>>;
   onPick?: (agent: LocalAgentId) => void;
   onPref?: (agent: LocalAgentId, configId: string, value: unknown) => void;
+  isolated?: boolean;
 } = {}) {
   const t = useT();
   const [open, setOpen] = React.useState(false);
@@ -142,7 +167,8 @@ export function ModelPopover({ placement = 'bottom', align = 'start', agent: con
   const ready = (id: LocalAgentId) => shown.find((a) => a.id === id)?.status === 'ready';
   const selectedReady = ready(agent);
   const configurationRevision = la.roster?.find((a) => a.id === agent)?.configurationRevision;
-  React.useEffect(() => { if (selectedReady) void ensureOptions(agent); }, [agent, selectedReady, configurationRevision, ensureOptions]);
+  const agentPath = la.roster?.find((a) => a.id === agent)?.path;
+  React.useEffect(() => { if (selectedReady) void ensureOptions(agent); }, [agent, selectedReady, configurationRevision, agentPath, ensureOptions]);
   React.useEffect(() => {
     if (!open) return;
     void refresh();
@@ -152,7 +178,12 @@ export function ModelPopover({ placement = 'bottom', align = 'start', agent: con
   const picked = conversationPrefs ?? la.prefs;
   const options = agentOptions({ ...la, prefs: picked }, agent);
   const prefs = effectivePrefs(picked, agent, la.roster, options);
-  const rows = options ? menuOptions(options, t('composer.optionDefault')).filter((o) => offeredOption(agent, la.roster, o)) : [];
+  const catalog = la.roster?.find((a) => a.id === agent)?.catalog;
+  const selectedModel = options?.find((o) => o.category === 'model')?.currentValue;
+  const unknownParameters = catalog && typeof selectedModel === 'string' && !catalog.byModel[selectedModel];
+  const defaultOption = unknownParameters ? t(catalog.refreshing ? 'composer.optionUpdating' : 'composer.optionUnavailable') : t('composer.optionDefault');
+  const optionsError: { text: string; code?: string } | undefined = la.optionsError[agent] ?? (catalog?.error ? { text: catalog.error } : undefined);
+  const rows = options?.length ? menuOptions(options, defaultOption).filter((o) => offeredOption(agent, la.roster, o)) : [];
   const summary = agentModelSummary(options, prefs);
   const triggerModel = summary.model;
   const triggerEffort = rows.some((o) => o.category === 'thought_level' && !o.fixed) ? summary.effort : null;
@@ -171,7 +202,7 @@ export function ModelPopover({ placement = 'bottom', align = 'start', agent: con
   };
   const chooseAgent = (a: RosterAgent) => {
     setSide(null);
-    if (a.status === 'ready') { la.pick(a.id); onPick?.(a.id); return; }
+    if (a.status === 'ready') { if (!isolated) la.pick(a.id); onPick?.(a.id); return; }
     if (a.status === 'checking' || a.status === 'waiting') return;
     /* not connected, signed out, not found, no key: set up in Settings → Agents, where connecting and signing in are */
     setOpen(false);
@@ -182,7 +213,7 @@ export function ModelPopover({ placement = 'bottom', align = 'start', agent: con
   const choosing = side ? rows.find((o) => o.id === side) : undefined;
   const chosenValue = (o: Option) => (o.fixed ? o.options![0]!.value : optionValue(options, prefs, o.id));
   /* a fixed row's one value is already the one in use */
-  const pickChoice = (o: Option, value: unknown) => { if (!o.fixed) { la.setPref(agent, o.id, value); onPref?.(agent, o.id, value); } };
+  const pickChoice = (o: Option, value: unknown) => { if (!o.fixed) { if (!isolated) la.setPref(agent, o.id, value); onPref?.(agent, o.id, value); } };
 
   /* Keep the side menu beside its row and inside the window, including when an agent adds choices while it is open
      or the window's height changes. Measure again after width/height constraints change the rendered menu. */
@@ -242,13 +273,18 @@ export function ModelPopover({ placement = 'bottom', align = 'start', agent: con
   const sideMenu = open && choosing && typeof document !== 'undefined' ? createPortal(
     <div ref={sideRef} onMouseEnter={() => showSide(choosing.id)} onMouseLeave={hideSideSoon}
       style={{ ...POPOVER_CHROME, padding: 4, overflowY: 'auto', ...(sideStyle ?? { position: 'fixed', left: -9999, top: 0 }) }}>
-      {/* its choices follow Settings' order and visibility. */}
+      {/* The model's maker for Zfilm, then its name; the choices follow Settings' order and visibility. */}
       {rowChoices(agent, choosing, chosenValue(choosing)).map((choice) => {
         const selected = chosenValue(choosing) === choice.value;
         return (
           <button key={String(choice.value)} type="button" onMouseDown={keepFocus}
             disabled={choice.disabled} title={choice.disabled ? t('composer.modelUnavailableInfo') : undefined}
             onClick={() => pickChoice(choosing, choice.value)} className={`${ROW} disabled:cursor-default disabled:opacity-50`}>
+            {agent === 'openfilm' && choosing.category === 'model' ? (
+              <span aria-hidden className="flex w-4 shrink-0 justify-center text-[var(--text-muted)]">
+                {MODEL_PROVIDER_ICONS.get(String(choice.value).split('/', 1)[0])}
+              </span>
+            ) : null}
             <span className="min-w-0 flex-1 truncate text-[var(--text)]">{choice.name}</span>
             {choice.disabled ? <span className="text-[11px] text-[var(--text-muted)]">{t('composer.modelUnavailable')}</span> : null}
             <Check size={13} className={`ml-2 shrink-0 text-[var(--text)] ${selected ? '' : 'invisible'}`} />
@@ -325,12 +361,12 @@ export function ModelPopover({ placement = 'bottom', align = 'start', agent: con
               </div>
             ) : rows.length === 0 ? (
               <p className="px-2.5 py-1.5 text-[12px] leading-relaxed text-[var(--text-muted)]">
-                {la.optionsError[agent]
+                {optionsError
                   ? <>
-                    {la.optionsError[agent]?.code === 'outdated' ? t('composer.agentOutdated') : t('composer.agentOptionsFailed')} <button type="button" onMouseDown={keepFocus} onClick={() => void la.ensureOptions(agent, { retry: true })} className="text-[var(--text)] underline underline-offset-2">{t('project.retry')}</button>
+                    {optionsError.code === 'outdated' ? t('composer.agentOutdated') : t('composer.agentOptionsFailed')} <button type="button" onMouseDown={keepFocus} onClick={() => void la.ensureOptions(agent, { retry: true })} className="text-[var(--text)] underline underline-offset-2">{t('project.retry')}</button>
                     {/* what the agent said, so the person can fix it (a setting it cannot read) or tell us */}
-                    {failureReason(la.optionsError[agent]) ? (
-                      <span className="mt-1 line-clamp-4 block select-text break-words text-[11.5px] text-[var(--text-faint)]" title={la.optionsError[agent]?.text}>{failureReason(la.optionsError[agent])}</span>
+                    {failureReason(optionsError) ? (
+                      <span className="mt-1 line-clamp-4 block select-text break-words text-[11.5px] text-[var(--text-faint)]" title={optionsError.text}>{failureReason(optionsError)}</span>
                     ) : null}
                   </>
                   : t('composer.agentLoading')}

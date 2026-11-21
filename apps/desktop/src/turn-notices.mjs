@@ -1,7 +1,7 @@
 /**
- * The system notifications for the chat's turns, while OpenFilm is not in front (#230): a turn done, one stopped by an
+ * The system notifications for the chat's turns, while Zfilm is not in front (#230): a turn done, one stopped by an
  * error, and an agent waiting for the person's answer (a question, a permission). Clicking one shows its project's tab
- * (main.mjs). Settings › General switches them off (`notify`, chat-ipc.mjs preferences).
+ * (main.mjs). Settings › Advanced switches them on (`notify`, chat-ipc.mjs preferences); off by default.
  *
  * Pure: no Electron, so `node --test` runs it.
  */
@@ -20,7 +20,7 @@ export function turnOutcome(result) {
 }
 
 /**
- * A notification's title and words, or null for none: OpenFilm in front (the person sees the chat), or notifications
+ * A notification's title and words, or null for none: Zfilm in front (the person sees the chat), or notifications
  * switched off. The project is the title. An error is redacted, as a problem report is (a notification shows on the
  * lock screen and stays in Notification Center and Action Center), and cut long: it shows a line or two.
  * @param {'done' | 'failed' | 'asking'} kind

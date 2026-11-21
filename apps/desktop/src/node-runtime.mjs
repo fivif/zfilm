@@ -1,7 +1,7 @@
 /**
  * The Node the app's own scripts run with (the `openfilm` command, the agents' adapters): Electron itself, as Node
  * (ELECTRON_RUN_AS_NODE). On macOS its Helper, not the app's main program: the main program run as Node would still
- * put a second OpenFilm in the Dock. Reads no Electron module.
+ * put a second Zfilm in the Dock. Reads no Electron module.
  */
 import { existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';

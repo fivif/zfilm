@@ -453,7 +453,7 @@ test('a kept path for something that is not one of the agents is dropped', () =>
   assert.deepEqual(readChoices(dir).paths, { codex: '/opt/codex' });
 });
 
-test('disconnecting only stops OpenFilm using an agent; connecting again uses the account signed in then', async () => {
+test('disconnecting only stops Zfilm using an agent; connecting again uses the account signed in then', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'of-roster-'));
   let account = { method: 'claude.ai', email: 'a@b.test' };
   const closed = [];

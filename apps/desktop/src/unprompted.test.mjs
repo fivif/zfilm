@@ -31,7 +31,7 @@ test('a background turn that ended with nothing in it is empty', () => {
 test('a background turn with something in it, still running, or failed is kept', () => {
   assert.equal(isEmptyBackgroundTurn({ origin: 'background', status: 'ready' }, [{ type: 'text' }]), false);
   assert.equal(isEmptyBackgroundTurn({ origin: 'background', status: 'generating' }, []), false);
-  assert.equal(isEmptyBackgroundTurn({ origin: 'background', status: 'error', error: 'OpenFilm closed while the agent was working on this.' }, []), false);
+  assert.equal(isEmptyBackgroundTurn({ origin: 'background', status: 'error', error: 'Zfilm closed while the agent was working on this.' }, []), false);
 });
 
 test('a turn the person started is never dropped, even with nothing in it', () => {

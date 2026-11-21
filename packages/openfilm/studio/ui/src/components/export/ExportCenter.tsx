@@ -20,10 +20,12 @@ import { useLanguage, useT } from '@/i18n';
 import { studioHost } from '@/lib/host';
 import { MenuSelect } from '@/components/MenuSelect';
 import { CustomFrame } from '@/components/FramePicker';
-import { FRAME_RATES } from '@/lib/timecode';
+import { FRAME_RATES, formatTimecode } from '@/lib/timecode';
+import type { FilmRange } from '@/lib/studio-refs';
 import { applyRangeDelivery, readExportRanges, requestDurationMs, type ExportRangeDraft, type RangeDelivery } from '@/lib/export-range';
 import { api } from '@/api';
 import { DEFAULT_VIDEO_EXPORT, legacySocialVideo, patchVideoExport, readVideoExport, videoExportPreset, type VideoExportSettings } from '@/lib/video-export-preset';
+import { announceDeliveryLoudness, DELIVERY_LOUDNESS, keptLoudness } from '@/lib/delivery-loudness';
 import {
   CODEC_LABEL,
   EXPORT_ALPHA_CODECS,
@@ -35,13 +37,21 @@ import {
   exportGifEstimateBytes,
   exportPreset,
   rangeMarks,
+  sizeTargetBitrate,
+  sizeTargetLeast,
+  TARGET_CODECS,
+  TARGET_MBPS,
+  targetAudioBps,
+  targetEstimateBytes,
   type ExportQuality,
   type ExportVideoCodec,
 } from '@/lib/export-spec';
 import {
+  exportCaptions,
+  exportProjectSizes,
+  exportSettings,
   formatBytes,
   formatFilmTime,
-  listExports,
   probeFps,
   PROJECT_PARTS,
   startExports,
@@ -55,10 +65,15 @@ import {
 import { FILM_FRAME_IDS, filmFrameBox, filmFrameRatio, type FilmFrameFill, type FilmFrameId } from '@/lib/film-frame';
 import { cleanMoments, loadSharedMoments, MOMENTS_MAX, momentSeconds, saveMoments } from '@/lib/export-moments';
 import { MomentPicker } from './MomentPicker';
+import { coversApi, coverThumb, shapeOf, type CoverInfo } from '@/lib/covers';
 import { RangePicker } from './RangePicker';
-import { LARGE_DIALOG, LARGE_DIALOG_BACKDROP } from '../dialog-chrome';
+import { LARGE_DIALOG, LARGE_DIALOG_BACKDROP, LARGE_DIALOG_SIDE } from '../dialog-chrome';
 
 type Dest = 'video' | 'alpha' | 'nle' | 'gif' | 'audio' | 'subtitles' | 'images' | 'project';
+type ExportScope = 'all' | 'timeline' | 'custom';
+function supportsRange(dest: Dest, alphaClip: boolean): boolean {
+  return dest === 'video' || dest === 'gif' || dest === 'audio' || dest === 'subtitles' || (dest === 'alpha' && !alphaClip);
+}
 type ImageOutput = 'files' | 'zip' | 'pdf' | 'pptx';
 const IMAGE_OUTPUTS: readonly ImageOutput[] = ['files', 'zip', 'pdf', 'pptx'];
 
@@ -93,11 +108,13 @@ const WHOLE_FILM = '__film__';
 
 interface Settings {
   dest: Dest;
+  workers: number | 'auto';
   video: VideoExportSettings;
   gif: { width: number; fps: number; frame: FrameChoice; fill: FilmFrameFill; burn: boolean };
   /** `source`: a block's clip id, or the whole film. */
   alpha: { codec: ExportVideoCodec; source: string; shortEdge: number; scale: number; fps: number; audio: boolean };
-  audio: { format: 'wav' | 'm4a' | 'mp3'; mix: boolean; stems: boolean };
+  /** `loudness`: the mix's, as a video's (lib/delivery-loudness); the stems stay as they are */
+  audio: { format: 'wav' | 'm4a' | 'mp3'; mix: boolean; stems: boolean; loudness: number | null; loudnessChosen?: boolean };
   /** For an editing program: the sound as clips or as mixed stems. */
   /** the app it is for: `draft` 剪映 (in Chinese) or CapCut (elsewhere), the same draft; `auto`: the draft when that app
       is on this computer, else Premiere Pro */
@@ -115,10 +132,11 @@ interface Settings {
 
 const DEFAULTS: Settings = {
   dest: 'video',
+  workers: 'auto',
   video: { ...DEFAULT_VIDEO_EXPORT },
   gif: { width: 640, fps: 15, frame: 'current', fill: 'contain', burn: true },
   alpha: { codec: 'prores4444', source: WHOLE_FILM, shortEdge: 1080, scale: 1, fps: 30, audio: true },
-  audio: { format: 'wav', mix: true, stems: false },
+  audio: { format: 'wav', mix: true, stems: false, loudness: DELIVERY_LOUDNESS },
   nle: { app: 'auto', fps: 'source', audio: 'clips', media: 'copy', alphaDraft: 'auto', alphaXml: 'prores4444' },
   subtitles: { format: 'srt' },
   images: { as: 'files', format: 'png', shortEdge: 1080, frame: 'current', fill: 'contain', burn: false },
@@ -165,8 +183,9 @@ function loadSettings(language: string, projectFps: number): Settings {
       video,
       gif: { ...DEFAULTS.gif, ...raw.gif },
       alpha: { ...DEFAULTS.alpha, ...raw.alpha, audio: true },
-      audio: { ...DEFAULTS.audio, ...raw.audio },
+      audio: { ...DEFAULTS.audio, ...raw.audio, loudness: keptLoudness(raw.audio ? raw.audio.loudness : DELIVERY_LOUDNESS, raw.audio?.loudnessChosen === true) },
       nle,
+      workers: Number.isInteger(raw.workers) && Number(raw.workers) >= 1 && Number(raw.workers) <= 8 ? Number(raw.workers) : 'auto',
       subtitles: { ...DEFAULTS.subtitles, ...raw.subtitles },
       images,
       /* the parts besides the work start off each time (history, chat and logs are the person's own): only zip or
@@ -180,6 +199,8 @@ function loadSettings(language: string, projectFps: number): Settings {
 
 function saveSettings(s: Settings): void {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(s)); } catch { /* storage off (private window) */ }
+  /* the preview is heard at the video's loudness */
+  announceDeliveryLoudness();
 }
 
 const SHORT_EDGES = [480, 720, 1080, 1440, 2160];
@@ -217,6 +238,9 @@ export interface ExportCenterProps {
   open: boolean;
   onClose: () => void;
   projectId: string;
+  /** Save pending edits before choosing the displayed revision to export. */
+  savedRevision?: () => Promise<string | undefined>;
+  refreshPreview?: () => void;
   title: string;
   /** The film's length. */
   durationMs: number;
@@ -241,32 +265,46 @@ export interface ExportCenterProps {
   mgBlocks?: readonly { clipId: string; label: string; startMs: number; durMs: number }[];
   /** From a block's "Export this clip": opens on transparent assets with that block chosen. */
   focusClipId?: string;
+  /** The marked timeline range when this export was opened. */
+  timelineRange?: FilmRange | null;
   /** The exports were queued (the tray shows them). */
   onQueued?: (jobs: ExportJob[]) => void;
+  /** The film's covers (lib/covers): shown with a video, the ticked ones exported as pictures beside it; `edit` opens the cover studio. */
+  covers?: { projectId: string; list: readonly CoverInfo[]; main: string | null; edit: () => void } | null;
   /** The project's frame rate (`.film/settings.json`, else its footage's): a video's rate unless another is picked. */
   projectFps?: number;
   /** Media files the film uses that are gone: an export that draws or plays the film stops at them, so it is held back. */
   missingFiles?: readonly string[];
 }
 
-/** What draws or plays the film, and so needs every file it uses. */
-const RENDERS: ReadonlySet<Dest> = new Set(['video', 'alpha', 'gif', 'audio', 'images']);
+/** Delivery types that draw the project's picture. */
+const PICTURE_EXPORTS: ReadonlySet<Dest> = new Set(['video', 'alpha', 'gif', 'images']);
 
 export function ExportCenter(props: ExportCenterProps) {
-  const { open, onClose } = props;
+  const { open, onClose, timelineRange, durationMs: totalMs } = props;
   const t = useT();
   const language = useLanguage();
   /** the platforms offered in this language (a platform picked in another and not offered here is not exported) */
   const presets = React.useMemo(() => exportPresetsFor(language), [language]);
   const [can, setCan] = React.useState<ExportCapabilities | null>(null);
+  const [renderAuto, setRenderAuto] = React.useState<number | null>(null);
   /** 剪映 and CapCut on this computer: an editing project for one goes into its drafts */
   const [draftApps, setDraftApps] = React.useState<{ jianying: boolean; capcut: boolean }>({ jianying: false, capcut: false });
   const [s, setS] = React.useState<Settings>(DEFAULTS);
   const [hydrated, setHydrated] = React.useState(false);
-  const [range, setRange] = React.useState(false);
+  const [scope, setScope] = React.useState<ExportScope>('all');
+  const range = scope !== 'all';
+  const timelineDraft: ExportRangeDraft | null = timelineRange
+    ? { id: 'timeline', from: String(timelineRange.startMs / 1000), to: String(timelineRange.endMs / 1000) }
+    : null;
   const [rangeParts, setRangeParts] = React.useState<ExportRangeDraft[]>([]);
   const [rangeDelivery, setRangeDelivery] = React.useState<RangeDelivery>('separate');
   const [working, setWorking] = React.useState<string | null>(null);
+  /* the covers exported as pictures with a video: the main one, until others are ticked */
+  const [coverPick, setCoverPick] = React.useState<readonly string[] | null>(null);
+  /* the film's cover as the video's first frame (platforms that take the first frame show it) */
+  const [coverFirst, setCoverFirst] = React.useState(false);
+  const coversTicked = coverPick ?? (props.covers?.main ? [props.covers.main] : []);
   const [result, setResult] = React.useState<{ ok: boolean; text: string } | null>(null);
   const [defaultFolder, setDefaultFolder] = React.useState<string>('');
   /** How many subtitle cues the film has (null until the server says). */
@@ -283,13 +321,24 @@ export function ExportCenter(props: ExportCenterProps) {
   const [exportName, setExportName] = React.useState<string>('');
   /** Whether that name was typed over: only then is it sent, so a dialog left alone exports as it always did. */
   const [nameTyped, setNameTyped] = React.useState(false);
+  const dialogRef = React.useRef<HTMLDivElement>(null);
+
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement;
+    dialogRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, [open]);
 
   React.useEffect(() => {
     if (!open) return;
     const loaded = loadSettings(language, props.projectFps ?? 30);
+    const loadedAlphaClip = props.mgBlocks?.some((b) => b.clipId === loaded.alpha.source) ?? false;
     setS(props.focusClipId
       ? { ...loaded, dest: 'alpha', alpha: { ...loaded.alpha, source: props.focusClipId } }
-      : loaded);
+      : timelineRange && !supportsRange(loaded.dest, loadedAlphaClip) ? { ...loaded, dest: 'video' } : loaded);
     setHydrated(true);
     setResult(null);
     setWorking(null);
@@ -297,8 +346,26 @@ export function ExportCenter(props: ExportCenterProps) {
     /* a name is this export's, not a setting: each visit starts from the project's own */
     setExportName(props.title);
     setNameTyped(false);
-    setRange(false);
-    void listExports(props.projectId).then((r) => { setCan(r.can); setDraftApps({ jianying: Boolean(r.drafts?.jianying), capcut: Boolean(r.drafts?.capcut) }); setDefaultFolder(r.folder); setCaptionCount(r.subtitles ?? 0); setCaptionTracks(Boolean(r.captionTracks)); setProjectSizes(r.project ?? null); }).catch(() => {});
+    setScope(timelineDraft ? 'timeline' : 'all');
+    setRangeParts([timelineDraft ?? { id: 'initial', from: '0', to: String(Math.min(3000, totalMs) / 1000) }]);
+    setRangeDelivery('separate');
+    setCaptionCount(null);
+    setCaptionTracks(false);
+    setProjectSizes(null);
+    const life = new AbortController();
+    void exportSettings(props.projectId, life.signal).then((r) => {
+      if (life.signal.aborted) return;
+      setCan(r.can);
+      setRenderAuto(r.render.auto);
+      setDraftApps(r.drafts);
+      setDefaultFolder(r.folder);
+    }).catch(() => {});
+    void exportCaptions(props.projectId, life.signal).then((r) => {
+      if (life.signal.aborted) return;
+      setCaptionCount(r.subtitles);
+      setCaptionTracks(r.captionTracks);
+    }).catch(() => {});
+    return () => life.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -314,7 +381,6 @@ export function ExportCenter(props: ExportCenterProps) {
   }, [open, onClose, working]);
 
   const stage = props.stage;
-  const totalMs = props.durationMs;
   const film = props.film ?? null;
   const soundKinds = React.useMemo(
     () => new Set<StemKind>((film?.sounds ?? []).filter((x) => x.durMs > 0).map((x) => (x.src && VIDEO_SRC.test(x.src) ? 'footage' : x.kind))),
@@ -344,12 +410,10 @@ export function ExportCenter(props: ExportCenterProps) {
 
   /* Clip edges remain shortcuts; the time fields can name any point in the film. */
   const boundaries = React.useMemo(() => rangeMarks(film?.scenes ?? [], totalMs), [film, totalMs]);
-  React.useEffect(() => {
-    setRangeParts([{ id: 'initial', from: '0', to: String(Math.min(3000, totalMs) / 1000) }]);
-  }, [totalMs, props.projectId]);
 
   const projectFps = props.projectFps ?? 30;
-  const parsedRanges = readExportRanges(rangeParts, totalMs, projectFps);
+  const activeParts = scope === 'timeline' ? (timelineDraft ? [timelineDraft] : []) : rangeParts;
+  const parsedRanges = range ? readExportRanges(activeParts, totalMs, projectFps) : null;
   const rangeMs = range && parsedRanges ? parsedRanges.reduce((n, [from, to]) => n + (to - from) * 1000, 0) : totalMs;
 
   const resolveFrame = (f: FrameChoice): FilmFrameId => (f === 'current' ? props.frame : f);
@@ -382,15 +446,37 @@ export function ExportCenter(props: ExportCenterProps) {
   };
 
   const dest: Dest = DESTS.some((d) => d.id === s.dest) ? s.dest : 'video';
+  React.useEffect(() => {
+    if (!open || dest !== 'project') return undefined;
+    const life = new AbortController();
+    void exportProjectSizes(props.projectId, life.signal).then((sizes) => {
+      if (!life.signal.aborted) setProjectSizes(sizes);
+    }).catch(() => {});
+    return () => life.abort();
+  }, [open, dest, props.projectId]);
   const imageDocument = s.images.as === 'pdf' || s.images.as === 'pptx';
   const alphaBlock = blocks.find((b) => b.clipId === s.alpha.source);
-  const canRange = totalMs > 0 && (dest === 'video' || dest === 'gif' || dest === 'audio' || dest === 'subtitles' || (dest === 'alpha' && !alphaBlock));
+  const canRange = totalMs > 0 && supportsRange(dest, Boolean(alphaBlock));
+  const scopeUnavailable = !canRange && range;
   const rangeInvalid = canRange && range && !parsedRanges;
-  const rangeError = rangeParts.length ? t('exportCenter.rangeInvalid').replace('{end}', String(totalMs / 1000)) : t('exportCenter.rangePickOne');
+  const rangeError = activeParts.length ? t('exportCenter.rangeInvalid').replace('{end}', String(totalMs / 1000)) : t('exportCenter.rangePickOne');
   /* how long what comes out is: one element alone is its own length, not the film's */
   const outMs = dest === 'alpha' && alphaBlock ? alphaBlock.durMs : rangeMs;
   const selectedVideoPreset = exportPreset(s.video.preset);
   const videoCodec: ExportVideoCodec = codecAvailable(s.video.codec, can) && VIDEO_CODECS.includes(s.video.codec) ? s.video.codec : 'h264';
+  /* the cover put first: the one shaped most like the video (the main one when two are as close) */
+  const firstCover = React.useMemo(() => {
+    const list = props.covers?.list ?? [];
+    if (!list.length) return null;
+    const want = filmFrameRatio(resolveFrame(s.video.frame), props.stage);
+    const off = (c: CoverInfo) => Math.abs(Math.log(c.stage.w / c.stage.h / want)) - (c.folder === props.covers?.main ? 1e-6 : 0);
+    return [...list].sort((a, b) => off(a) - off(b))[0]!.folder;
+  }, [props.covers, s.video.frame, props.stage]); // eslint-disable-line react-hooks/exhaustive-deps
+  const firstCoverInfo = props.covers?.list.find((c) => c.folder === firstCover);
+  const firstCoverRatio = firstCoverInfo ? shapeOf(firstCoverInfo.stage).ratio : '';
+  /* a delivery's bitrate or size, for the codecs held to one on the processor (HEVC's needs libx265) */
+  const targetable = TARGET_CODECS.includes(videoCodec) && (videoCodec !== 'hevc' || !can || can.hevcBitrate !== false);
+  const videoTarget = targetable ? s.video.target : null;
   const alphaCodec: ExportVideoCodec = EXPORT_ALPHA_CODECS.includes(s.alpha.codec) && codecAvailable(s.alpha.codec, can) ? s.alpha.codec : 'prores4444';
   const audioFormat = s.audio.format === 'mp3' && can && !can.mp3 ? 'wav' : s.audio.format;
   /* the same draft is 剪映's or CapCut's: the one on this computer, else (both or neither) 剪映 in Chinese and CapCut in
@@ -419,16 +505,18 @@ export function ExportCenter(props: ExportCenterProps) {
   /* ── the exports this screen asks for ── */
   const baseRequests = React.useMemo((): ExportRequest[] => {
     /* subtitles drawn into the picture: only a film that has some */
-    const burn = (on: boolean) => (captions > 0 && on && !captionTracks ? { burnSubtitles: true } : {});
+    const burn = (on: boolean) => (on && !captionTracks ? { burnSubtitles: true } : {});
     switch (dest) {
       case 'video': {
         const v = s.video;
         return [{
           kind: 'video', codec: videoCodec, frame: resolveFrame(v.frame), fill: v.fill, shortEdge: v.shortEdge, fps: fpsFor(v.fps),
-          quality: v.quality, audio: v.audio, label: selectedVideoPreset?.name ?? codecName(videoCodec), ...burn(v.burn),
+          ...(videoTarget === 'bitrate' ? { bitrate: Math.round(v.targetMbps * 1e6) } : videoTarget === 'size' ? {} : { quality: v.quality }),
+          audio: v.audio, label: selectedVideoPreset?.name ?? codecName(videoCodec), ...burn(v.burn),
           ...(selectedVideoPreset ? { preset: selectedVideoPreset.name } : {}),
-          ...(captions > 0 && v.sidecar !== 'none' && videoCodec !== 'png' ? { sidecar: v.sidecar } : {}),
+          ...((captionCount == null || captions > 0) && v.sidecar !== 'none' && videoCodec !== 'png' ? { sidecar: v.sidecar } : {}),
           ...(v.audio && v.loudness != null && videoCodec !== 'png' ? { loudness: v.loudness } : {}),
+          ...(scope !== 'timeline' && coverFirst && firstCover && (videoCodec === 'h264' || videoCodec === 'hevc') ? { cover: firstCover } : {}),
         }];
       }
       case 'alpha': {
@@ -441,7 +529,9 @@ export function ExportCenter(props: ExportCenterProps) {
         return [{ kind: 'gif', frame: resolveFrame(s.gif.frame), fill: s.gif.fill, width: s.gif.width, fps: s.gif.fps, label: 'GIF', ...burn(s.gif.burn) }];
       case 'audio': {
         const stems = s.audio.stems;
-        return [{ kind: 'audio', format: audioFormat, stems, mix: stems ? s.audio.mix : true, label: t(stems ? 'exportCenter.audioStems' : 'exportCenter.audioMix') }];
+        const mixed = stems ? s.audio.mix : true;
+        return [{ kind: 'audio', format: audioFormat, stems, mix: mixed, label: t(stems ? 'exportCenter.audioStems' : 'exportCenter.audioMix'),
+          ...(mixed && s.audio.loudness != null ? { loudness: s.audio.loudness } : {}) }];
       }
       case 'nle':
         return [{
@@ -465,11 +555,23 @@ export function ExportCenter(props: ExportCenterProps) {
         }];
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dest, s, can, nleApp, nleAlpha, draftApp, props.frame, blocks, nleSourceFps, captions, captionTracks, projectParts, moments]);
+  }, [dest, s, can, nleApp, nleAlpha, draftApp, props.frame, blocks, nleSourceFps, captions, captionCount, captionTracks, projectParts, moments, coverFirst, firstCover, scope]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const requests = React.useMemo(() => canRange && range && parsedRanges
-    ? applyRangeDelivery(baseRequests, parsedRanges, rangeDelivery) : baseRequests,
-  [baseRequests, canRange, range, parsedRanges, rangeDelivery]);
+  /* the sound a video's size target leaves room for: none when the film is known to have none */
+  const targetAudio = (r: ExportRequest) => (r.kind === 'video' && r.audio && !knownSilent ? targetAudioBps(r.codec) : 0);
+  const requests = React.useMemo(() => {
+    const ranged = canRange && range && parsedRanges ? applyRangeDelivery(baseRequests, parsedRanges, rangeDelivery) : baseRequests;
+    const requestedWorkers = s.workers;
+    const asked = ranged.map((r) => requestedWorkers !== 'auto' && ['video', 'gif', 'nle'].includes(r.kind) ? { ...r, workers: requestedWorkers } : r);
+    if (dest !== 'video' || videoTarget !== 'size') return asked;
+    /* a size is a bitrate for each file, from its own length, its peaks held to it: the file never comes out over */
+    return asked.map((r) => {
+      if (r.kind !== 'video') return r;
+      const bitrate = Math.min(TARGET_MBPS[1] * 1e6, sizeTargetBitrate(r.codec, s.video.targetMB * 1e6, requestDurationMs(r, totalMs), targetAudio(r)));
+      return { ...r, bitrate, maxrate: bitrate };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseRequests, canRange, range, parsedRanges, rangeDelivery, dest, videoTarget, s.video.targetMB, s.workers, totalMs, knownSilent]);
 
   /* a range, not a size: what is in the picture decides a video's or a GIF's size (export-spec.ts); sound is exact */
   const estBytes = React.useMemo(() => requests.reduce<[number, number]>(([low, high], r) => {
@@ -477,10 +579,15 @@ export function ExportCenter(props: ExportCenterProps) {
     if (r.kind === 'video') {
       /* one block's size depends on the block: not guessed */
       if (r.clip) return [low, high];
+      /* held to a bitrate: about that, a still picture less */
+      if (r.bitrate) {
+        const bytes = targetEstimateBytes(r.bitrate, requestDurationMs(r, totalMs), targetAudio(r));
+        return add([bytes, bytes]);
+      }
       const frame = r.frame ?? 'native', fill = r.fill ?? 'contain';
       const size = exportFramedDims(stage, frame, fill, r.shortEdge ?? Math.min(stage.w, stage.h));
       return add(exportEstimateBytes({
-        codec: r.codec, size, filmPixels: exportFilmPixels(stage, frame, fill, size), fps: r.fps, quality: r.quality, durationMs: requestDurationMs(r, totalMs),
+        codec: r.codec, size, filmPixels: exportFilmPixels(stage, frame, fill, size), fps: r.fps, quality: r.quality ?? 'high', durationMs: requestDurationMs(r, totalMs),
         audio: r.audio && r.codec !== 'png' && !knownSilent, proresKs: !can?.proresChip,
       }));
     }
@@ -504,8 +611,11 @@ export function ExportCenter(props: ExportCenterProps) {
   }, [0, 0]), [requests, stage, totalMs, soundKinds, knownSilent, projectSizes, can]);
   /* "about 0.8 MB–8 MB"; one size when both ends read the same */
   const estText = estBytes[1] > 0 ? [...new Set(estBytes.map((b) => formatBytes(b)))].join('–') : '';
+  /* a size asked is what the file stays under, said in its own words (formatBytes counts in 1024s) */
+  const sizeCap = dest === 'video' && videoTarget === 'size' && requests.length === 1 ? `≤ ${Number(s.video.targetMB.toFixed(2))} MB` : '';
 
   const folder = s.folder || defaultFolder;
+  const folderLabel = folderName(folder) || t('exportCenter.defaultFolder');
 
   const fileCount = requests.reduce((n, r) => {
     if (r.kind === 'stills' && r.as === 'files') return n + (r.at?.length ?? 1);
@@ -514,16 +624,24 @@ export function ExportCenter(props: ExportCenterProps) {
     return n + 1;
   }, 0);
 
-  /* files the film uses that are gone: said first, by name, before anything is queued (it would stop at them) */
+  /* The preview's missing-file report is advisory. A selection may render without those sources. */
   const missing = props.missingFiles ?? [];
-  const missingReason = missing.length && RENDERS.has(dest)
+  const missingReason = missing.length && PICTURE_EXPORTS.has(dest) && !(canRange && range)
     ? t('exportCenter.missingMedia').replace('{n}', String(missing.length))
       .replace('{files}', missing.slice(0, 3).map((f) => f.split('/').pop()).join(', ') + (missing.length > 3 ? ', …' : ''))
     : null;
   const emptyReason = ((): string | null => {
-    if (missingReason) return missingReason;
     if (!totalMs && dest !== 'project') return t('exportCenter.emptyFilm');
+    if (scopeUnavailable) return t('exportCenter.rangeUnavailable');
     if (rangeInvalid) return rangeError;
+    if (dest === 'video' && videoTarget) {
+      const mbps = videoTarget === 'bitrate' ? s.video.targetMbps : Math.min(...requests.map((r) => (r.kind === 'video' ? r.bitrate ?? 0 : Infinity))) / 1e6;
+      if (videoTarget === 'bitrate' && !(mbps >= TARGET_MBPS[0] && mbps <= TARGET_MBPS[1])) return t('exportCenter.targetRange');
+      if (videoTarget === 'size' && !(mbps >= TARGET_MBPS[0])) {
+        const least = Math.max(...requests.map((r) => (r.kind === 'video' ? sizeTargetLeast(r.codec, requestDurationMs(r, totalMs), targetAudio(r)) : 0)));
+        return t('exportCenter.targetTooSmall').replace('{min}', `${Math.ceil(least / 1e5) / 10} MB`);
+      }
+    }
     if (dest === 'images' && moments.length === 0) return t('exportCenter.pickMoments');
     if (dest === 'images' && imageDocument && moments.length > MOMENTS_MAX.slides) return t('exportCenter.imagePageLimit').replace('{n}', String(MOMENTS_MAX.slides));
     if (dest === 'subtitles' && captionCount != null && captions === 0) return t('exportCenter.noCaptions');
@@ -533,23 +651,29 @@ export function ExportCenter(props: ExportCenterProps) {
 
   /* ── doing it ── */
   const queue = async (jobs: ExportRequest[]) => {
-    if (working || rangeInvalid) return;
+    if (working || rangeInvalid || scopeUnavailable) return;
     setResult(null);
-    if (!folder) {
-      setResult({ ok: false, text: t('exportCenter.noFolder') });
-      return;
-    }
     setWorking(t('exportCenter.queueing'));
     try {
       /* the name typed here, unless there is none or its field is hidden (a draft is named by its app): every way out
          of this screen comes through here */
       const typed = nameTyped && !toDrafts ? exportName.trim() : '';
       const named = typed ? jobs.map((job, index) => ({ ...job, name: typed + (canRange && range && rangeDelivery === 'separate' && (parsedRanges?.length ?? 0) > 1 ? ` - ${String(index + 1).padStart(2, '0')}` : '') })) : jobs;
-      const queued = await startExports(props.projectId, named, s.folder || undefined);
+      const revision = named.some((job) => job.kind !== 'project') ? await props.savedRevision?.() : undefined;
+      const queued = await startExports(props.projectId, named, s.folder || undefined, revision);
       props.onQueued?.(queued);
+      /* the ticked covers, as pictures beside the video */
+      if (dest === 'video' && scope !== 'timeline' && props.covers && coversTicked.length) {
+        void coversApi.draw(props.covers.projectId, [...coversTicked], 'jpg', { folder: folder || undefined, reveal: false }).catch(() => {});
+      }
       onClose();
     } catch (e) {
-      setResult({ ok: false, text: e instanceof TypeError ? t('exportCenter.engineDown') : (e instanceof Error ? e.message : String(e)) });
+      if (e instanceof Error && 'code' in e && e.code === 'export-preview-expired') {
+        props.refreshPreview?.();
+        setResult({ ok: false, text: t('exportCenter.previewRefreshing') });
+      } else {
+        setResult({ ok: false, text: e instanceof TypeError ? t('exportCenter.engineDown') : (e instanceof Error ? e.message : String(e)) });
+      }
     } finally {
       setWorking(null);
     }
@@ -584,7 +708,7 @@ export function ExportCenter(props: ExportCenterProps) {
 
   const primaryLabel = working
     ?? (fileCount > 1 ? t('exportCenter.exportN').replace('{n}', String(fileCount)) : t('exportCenter.export'));
-  const disabled = Boolean(working) || Boolean(emptyReason) || !folder;
+  const disabled = Boolean(working) || Boolean(emptyReason) || (dest === 'nle' && s.nle.app === 'auto' && !can);
 
   return createPortal(
     <div
@@ -594,16 +718,18 @@ export function ExportCenter(props: ExportCenterProps) {
       onClick={() => { if (!working) onClose(); }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
         aria-modal="true"
         aria-label={t('exportCenter.title')}
-        className={LARGE_DIALOG}
+        className={`${LARGE_DIALOG} outline-none`}
         style={{ animation: 'openfilm-rise 0.16s ease-out both' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* left: destinations */}
         {/* the list scrolls when the window is short; the note under it stays whole */}
-        <nav className="flex min-h-0 w-[212px] shrink-0 flex-col border-r border-[var(--border)]">
+        <nav className={LARGE_DIALOG_SIDE}>
           <h2 className="shrink-0 px-5 pb-2 pt-4 text-[15px] font-semibold tracking-tight text-[var(--text)]">{t('exportCenter.title')}</h2>
           <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain px-3 pb-2">
           {DESTS.map((d) => {
@@ -654,6 +780,81 @@ export function ExportCenter(props: ExportCenterProps) {
 
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-4 pt-3">
             <div className="flex flex-col gap-5">
+              {(canRange || timelineRange || range) && (
+                <Field label={t('exportCenter.range')}>
+                  <Segmented<ExportScope>
+                    value={scope}
+                    options={[
+                      { value: 'all', label: `${t('exportCenter.rangeAll')} · ${formatFilmTime(totalMs)}` },
+                      ...(timelineRange ? [{ value: 'timeline' as const, label: t('exportCenter.rangeTimeline') }] : []),
+                      { value: 'custom', label: t('exportCenter.rangePart') },
+                    ]}
+                    onChange={(next) => { setScope(next); setResult(null); }}
+                  />
+                  {scope === 'timeline' && timelineRange ? (
+                    <p className="text-[12px] text-[var(--text-muted)] tabular-nums">
+                      {formatTimecode(timelineRange.startMs, { fps: projectFps })} – {formatTimecode(timelineRange.endMs, { fps: projectFps })}
+                    </p>
+                  ) : null}
+                  {scope === 'custom' && canRange ? (
+                    <RangePicker
+                      projectId={props.projectId}
+                      totalMs={totalMs}
+                      fps={projectFps}
+                      stage={stage}
+                      boundaries={boundaries}
+                      value={rangeParts}
+                      onChange={setRangeParts}
+                      delivery={rangeDelivery}
+                      onDelivery={setRangeDelivery}
+                      error={rangeInvalid ? rangeError : null}
+                    />
+                  ) : null}
+                </Field>
+              )}
+              {dest === 'video' && props.covers && scope !== 'timeline' ? (
+                <Field label={t('covers.exportField')}>
+                  {props.covers.list.length ? (
+                    <div className="flex flex-wrap items-end gap-2.5" data-export-covers="">
+                      {props.covers.list.map((c) => {
+                        const on = coversTicked.includes(c.folder);
+                        const shape = shapeOf(c.stage);
+                        return (
+                          <button key={c.folder} type="button" role="checkbox" aria-checked={on} data-export-cover={c.folder}
+                            onClick={() => setCoverPick(on ? coversTicked.filter((f) => f !== c.folder) : [...coversTicked, c.folder])}
+                            className="flex flex-col items-center gap-1">
+                            <img src={coverThumb(props.covers!.projectId, c, 200)} alt="" draggable={false}
+                              className={`max-h-[84px] max-w-[120px] rounded-[5px] transition ${on ? 'ring-2 ring-[var(--accent)]' : 'opacity-45 ring-1 ring-[var(--border)]'}`} />
+                            <span className="text-[11px] text-[var(--text-muted)]">{on ? '✓ ' : ''}{shape.ratio}{c.folder === props.covers!.main ? ` · ${t('covers.mainBadge')}` : ''}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : <p className="text-[12px] text-[var(--text-faint)]">{t('covers.exportNone')}</p>}
+                  <button type="button" onClick={() => { onClose(); props.covers!.edit(); }} className="mt-2 self-start text-[12px] text-[var(--accent)] hover:underline">
+                    {props.covers.list.length ? t('covers.exportEdit') : t('covers.exportMake')} ›
+                  </button>
+                  <Hint>{t('covers.exportHint')}</Hint>
+                  {props.covers.list.length ? (
+                    <label className={`mt-2 flex items-start gap-2 text-[12px] ${videoCodec === 'h264' || videoCodec === 'hevc' ? 'text-[var(--text)]' : 'text-[var(--text-faint)]'}`}>
+                      <input type="checkbox" data-export-cover-first="" className="mt-0.5" checked={coverFirst} disabled={!(videoCodec === 'h264' || videoCodec === 'hevc')}
+                        onChange={(e) => setCoverFirst(e.target.checked)} />
+                      <span>{t('covers.exportFirst')}<span className="block text-[11px] text-[var(--text-faint)]">
+                        {videoCodec === 'h264' || videoCodec === 'hevc' ? t('covers.exportFirstNote').replace('{ratio}', firstCoverRatio) : t('covers.exportFirstCodec')}
+                      </span></span>
+                    </label>
+                  ) : null}
+                </Field>
+              ) : null}
+              {['video', 'alpha', 'gif', 'nle'].includes(dest) && (
+                <Field label={t('exportCenter.workers')}>
+                  <Segmented<number | 'auto'> value={s.workers} options={[
+                    { value: 'auto', label: renderAuto == null ? t('exportCenter.workersAuto') : t('exportCenter.workersAutoCount').replace('{n}', String(renderAuto)) },
+                    ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ value: n, label: String(n) })),
+                  ]} onChange={(workers) => setS((current) => ({ ...current, workers }))} />
+                  <Hint>{t('exportCenter.workersHint')}</Hint>
+                </Field>
+              )}
               {dest === 'video' && (
                 <>
                   <Field label={t('exportCenter.videoPreset')}>
@@ -729,7 +930,28 @@ export function ExportCenter(props: ExportCenterProps) {
                     </Field>
                     {!(videoCodec.startsWith('prores') || videoCodec === 'png') && (
                       <Field label={t('exportCenter.quality')}>
-                        <QualityPicker value={s.video.quality} onChange={(quality) => patch('video', { quality })} t={t} />
+                        <QualityPicker
+                          value={videoTarget ?? s.video.quality}
+                          targets={targetable}
+                          onChange={(q) => patch('video', q === 'bitrate' || q === 'size' ? { target: q } : { quality: q, target: null })}
+                          t={t}
+                        />
+                        {videoTarget && (
+                          <div className="mt-1 flex max-w-[360px] flex-col gap-1.5">
+                            <TargetInput
+                              key={videoTarget}
+                              value={videoTarget === 'bitrate' ? s.video.targetMbps : s.video.targetMB}
+                              unit={videoTarget === 'bitrate' ? 'Mb/s' : 'MB'}
+                              label={t(videoTarget === 'bitrate' ? 'exportCenter.qBitrate' : 'exportCenter.qSize')}
+                              onChange={(n) => patch('video', videoTarget === 'bitrate' ? { targetMbps: n } : { targetMB: n })}
+                            />
+                            <span className="text-[11px] leading-snug text-[var(--text-faint)]">
+                              {videoTarget === 'bitrate'
+                                ? t('exportCenter.targetBitrateHint')
+                                : t('exportCenter.targetSizeHint').replace('{rate}', formatMbps(Math.min(...requests.map((r) => (r.kind === 'video' ? r.bitrate ?? 0 : Infinity)))))}
+                            </span>
+                          </div>
+                        )}
                       </Field>
                     )}
                   </div>
@@ -745,7 +967,7 @@ export function ExportCenter(props: ExportCenterProps) {
                                 { value: 'mixed', label: t('exportCenter.loudnessAsMixed') },
                                 ...LOUDNESS_TARGETS.map((n) => ({ value: String(n), label: `${n} LUFS` })),
                               ]}
-                              onChange={(v) => patch('video', { loudness: v === 'mixed' ? null : Number(v) })}
+                              onChange={(v) => patch('video', { loudness: v === 'mixed' ? null : Number(v), loudnessChosen: true })}
                             />
                             <span className="mt-1 block text-[11px] leading-snug text-[var(--text-faint)]">{t('exportCenter.loudnessHint')}</span>
                           </div>
@@ -966,6 +1188,19 @@ export function ExportCenter(props: ExportCenterProps) {
                       )}
                     </div>
                   </Field>
+                  {(s.audio.mix || !s.audio.stems) && (
+                    <Field label={t('exportCenter.loudness')}>
+                      <Segmented
+                        value={s.audio.loudness == null ? 'mixed' : String(s.audio.loudness)}
+                        options={[
+                          { value: 'mixed', label: t('exportCenter.loudnessAsMixed') },
+                          ...LOUDNESS_TARGETS.map((n) => ({ value: String(n), label: `${n} LUFS` })),
+                        ]}
+                        onChange={(v) => patch('audio', { loudness: v === 'mixed' ? null : Number(v), loudnessChosen: true })}
+                      />
+                      <span className="mt-1 block text-[11px] leading-snug text-[var(--text-faint)]">{t('exportCenter.loudnessHint')}</span>
+                    </Field>
+                  )}
                   <Hint>{t('exportCenter.stemsHint')}</Hint>
                 </>
               )}
@@ -1098,33 +1333,6 @@ export function ExportCenter(props: ExportCenterProps) {
                 </div>
               )}
 
-              {/* range: any destination with a picture or a sound over time can take a part */}
-              {canRange && (
-                <Field label={t('exportCenter.range')}>
-                  <Segmented
-                    value={range ? 'part' : 'all'}
-                    options={[
-                      { value: 'all', label: `${t('exportCenter.rangeAll')} · ${formatFilmTime(totalMs)}` },
-                      { value: 'part', label: t('exportCenter.rangePart') },
-                    ]}
-                    onChange={(v) => setRange(v === 'part')}
-                  />
-                  {range && (
-                    <RangePicker
-                      projectId={props.projectId}
-                      totalMs={totalMs}
-                      fps={projectFps}
-                      stage={stage}
-                      boundaries={boundaries}
-                      value={rangeParts}
-                      onChange={setRangeParts}
-                      delivery={rangeDelivery}
-                      onDelivery={setRangeDelivery}
-                      error={rangeInvalid ? rangeError : null}
-                    />
-                  )}
-                </Field>
-              )}
             </div>
           </div>
 
@@ -1158,11 +1366,11 @@ export function ExportCenter(props: ExportCenterProps) {
                   onClick={() => void changeFolder()}
                   disabled={picking}
                   title={folder}
-                  aria-label={`${t('exportCenter.saveTo')}: ${folder || '—'}. ${t('exportCenter.change')}`}
+                  aria-label={`${t('exportCenter.saveTo')}: ${folder || folderLabel}. ${t('exportCenter.change')}`}
                   className="flex h-10 min-w-0 max-w-[45%] shrink-0 items-center gap-2 rounded-lg border border-[var(--border)] pl-3 pr-2.5 text-[13px] text-[var(--text)] outline-none transition hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)] focus-visible:border-[var(--accent)] disabled:opacity-60"
                 >
                   {picking ? <Loader2 size={15} className="shrink-0 animate-spin text-[var(--text-muted)]" /> : <FolderOpen size={15} className="shrink-0 text-[var(--text-muted)]" />}
-                  <span className="min-w-0 truncate">{folderName(folder) || '—'}</span>
+                  <span className="min-w-0 truncate">{folderLabel}</span>
                   <ChevronDown size={12} aria-hidden className="shrink-0 text-[var(--text-faint)]" />
                 </button>
               )}
@@ -1188,7 +1396,9 @@ export function ExportCenter(props: ExportCenterProps) {
                 {result ? (
                   <span className={result.ok ? 'text-[var(--ok)]' : 'text-[var(--err)]'}>{result.text}</span>
                 ) : emptyReason ? (
-                  <span data-export-reason="" className={missingReason ? 'text-[var(--warn)]' : 'text-[var(--text-faint)]'}>{emptyReason}</span>
+                  <span data-export-reason="" className="text-[var(--text-faint)]">{emptyReason}</span>
+                ) : missingReason ? (
+                  <span className="text-[var(--warn)]">{missingReason}</span>
                 ) : (
                   <>
                     {/* a project is not a length of film: its size only */}
@@ -1200,7 +1410,8 @@ export function ExportCenter(props: ExportCenterProps) {
                         {t('exportCenter.summary').replace('{n}', String(fileCount)).replace('{dur}', formatFilmTime(outMs))}
                       </span>
                     ) : null}
-                    {estText ? <span className="block text-[11px] text-[var(--text-faint)] tabular-nums">{`${t('exportCenter.approx')} ${estText}`}</span> : null}
+                    {sizeCap ? <span className="block text-[11px] text-[var(--text-faint)] tabular-nums">{sizeCap}</span>
+                      : estText ? <span className="block text-[11px] text-[var(--text-faint)] tabular-nums">{`${t('exportCenter.approx')} ${estText}`}</span> : null}
                   </>
                 )}
               </div>
@@ -1331,7 +1542,7 @@ function Chips<V extends string | number>({ value, options, onChange }: {
   );
 }
 
-function Segmented<V extends string>({ value, options, onChange }: {
+function Segmented<V extends string | number>({ value, options, onChange }: {
   value: V;
   options: readonly { value: V; label: string }[];
   onChange: (v: V) => void;
@@ -1397,17 +1608,44 @@ function PartToggle({ checked, onChange, label, hint, size, disabled, locked }: 
   );
 }
 
-function QualityPicker({ value, onChange, t }: { value: ExportQuality; onChange: (q: ExportQuality) => void; t: (k: string) => string }) {
+/** A quality, or (`targets`: a codec held to one) a delivery's bitrate or file size in its place. */
+function QualityPicker<Q extends ExportQuality | 'bitrate' | 'size'>({ value, onChange, targets = false, t }: {
+  value: Q; onChange: (q: Q) => void; targets?: boolean; t: (k: string) => string;
+}) {
+  const options = [
+    { value: 'standard', label: t('exportCenter.qStandard') },
+    { value: 'high', label: t('exportCenter.qHigh') },
+    { value: 'master', label: t('exportCenter.qMaster') },
+    ...(targets ? [{ value: 'bitrate', label: t('exportCenter.qBitrate') }, { value: 'size', label: t('exportCenter.qSize') }] : []),
+  ] as { value: Q; label: string }[];
+  return <Segmented value={value} options={options} onChange={onChange} />;
+}
+
+/** A bitrate in Mb/s, as the dialog says it. @param bits a second */
+const formatMbps = (bits: number) => `${Number((bits / 1e6).toFixed(bits < 1e8 ? 1 : 0))} Mb/s`;
+
+/** A target's number and its unit: what is typed is kept while it is no number yet, and the last number stands. */
+function TargetInput({ value, unit, label, onChange }: { value: number; unit: string; label: string; onChange: (n: number) => void }) {
+  const [draft, setDraft] = React.useState(String(value));
+  const n = Number(draft.trim());
+  const valid = draft.trim() !== '' && Number.isFinite(n) && n > 0;
   return (
-    <Segmented
-      value={value}
-      options={[
-        { value: 'standard', label: t('exportCenter.qStandard') },
-        { value: 'high', label: t('exportCenter.qHigh') },
-        { value: 'master', label: t('exportCenter.qMaster') },
-      ]}
-      onChange={onChange}
-    />
+    <label className={`flex h-8 w-[160px] items-center gap-1.5 rounded-lg border bg-[var(--bg-panel)] px-2.5 text-[12.5px] focus-within:border-[var(--text-faint)] ${valid ? 'border-[var(--border)]' : 'border-[var(--warn)]'}`}>
+      <input
+        value={draft}
+        inputMode="decimal"
+        spellCheck={false}
+        aria-label={`${label} (${unit})`}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          const next = Number(e.target.value.trim());
+          if (e.target.value.trim() !== '' && Number.isFinite(next) && next > 0) onChange(next);
+        }}
+        onBlur={() => { if (!valid) setDraft(String(value)); }}
+        className="min-w-0 flex-1 bg-transparent font-mono tabular-nums text-[var(--text)] outline-none"
+      />
+      <span className="shrink-0 text-[var(--text-muted)]">{unit}</span>
+    </label>
   );
 }
 

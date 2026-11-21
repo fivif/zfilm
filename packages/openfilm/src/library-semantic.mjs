@@ -58,7 +58,7 @@ export function passageOf(item, vocab, group) {
 }
 
 /** How long a search waits for the service before it goes on with keywords alone. */
-export const SEARCH_TIMEOUT_MS = 7000;
+export const SEARCH_TIMEOUT_MS = 2500;
 /** What was asked lately, and what the service said (a Studio running asks the same again as the person types). */
 const asked = new Map();
 

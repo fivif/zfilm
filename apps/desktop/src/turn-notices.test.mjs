@@ -7,7 +7,7 @@ import { LANGUAGES } from './i18n/language.mjs';
 
 const away = { project: 'Launch film', agent: 'Codex', language: 'en', inFront: false, on: true };
 
-test('a turn done, stopped by an error, or waiting for an answer is told while OpenFilm is not in front, its project the title', () => {
+test('a turn done, stopped by an error, or waiting for an answer is told while Zfilm is not in front, its project the title', () => {
   assert.deepEqual(turnNotice('done', away), { title: 'Launch film', body: 'Codex has finished.' });
   assert.deepEqual(turnNotice('asking', away), { title: 'Launch film', body: 'Codex is waiting for your answer.' });
   assert.deepEqual(turnNotice('failed', { ...away, error: 'Rate limit\nreached.' }), { title: 'Launch film', body: 'Codex stopped: Rate limit reached.' });
@@ -19,7 +19,7 @@ test('a turn done, stopped by an error, or waiting for an answer is told while O
   assert.deepEqual(turnNotice('done', { ...away, language: 'xx' }), { title: 'Launch film', body: 'Codex has finished.' }, 'an unknown language: English');
 });
 
-test('nothing is told with OpenFilm in front, or with notifications switched off', () => {
+test('nothing is told with Zfilm in front, or with notifications switched off', () => {
   assert.equal(turnNotice('done', { ...away, inFront: true }), null);
   assert.equal(turnNotice('asking', { ...away, on: false }), null);
 });
@@ -36,15 +36,19 @@ test("the notifications' words are there in each of Studio's languages", () => {
   for (const language of LANGUAGES) assert.deepEqual(Object.keys(TURN_NOTICE_WORDS[language]).sort(), ['agent', 'asking', 'done', 'failed'], language);
 });
 
-test('the notifications are on until switched off in Settings, and stay as switched', async () => {
+test('turn notifications default to off and preserve an explicitly saved choice', async () => {
   const { mkdtempSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const { readPreferences } = await import('./chat-ipc.mjs');
   const dir = mkdtempSync(join(tmpdir(), 'of-prefs-'));
-  assert.equal(readPreferences(dir).notify, true, 'on before anything is kept');
+  assert.equal(readPreferences(dir).notify, false, 'off before anything is kept');
   writeFileSync(join(dir, 'preferences.json'), JSON.stringify({ developer: true }));
-  assert.equal(readPreferences(dir).notify, true, 'on when kept before it existed');
+  assert.equal(readPreferences(dir).notify, false, 'off when older preferences have no notification choice');
+  writeFileSync(join(dir, 'preferences.json'), JSON.stringify({ notify: true }));
+  assert.equal(readPreferences(dir).notify, true, 'an explicit opt-in stays enabled');
   writeFileSync(join(dir, 'preferences.json'), JSON.stringify({ notify: false }));
   assert.equal(readPreferences(dir).notify, false);
+  writeFileSync(join(dir, 'preferences.json'), JSON.stringify({ notify: 'true' }));
+  assert.equal(readPreferences(dir).notify, false, 'only a saved boolean true enables notifications');
 });

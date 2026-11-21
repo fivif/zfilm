@@ -15,14 +15,14 @@ function claudeSession() {
     { type: 'user', uuid: 'u1', parentUuid: null, timestamp: at(1), message: { role: 'user', content: [{ type: 'text', text: 'Make a title' }] } },
     { type: 'attachment', uuid: 'a1', parentUuid: 'u1', timestamp: at(1), attachment: { type: 'instructions', files: [] }, rendered: [{ content: '<CLAUDE.md>be brief</CLAUDE.md>' }], renderedRole: 'user' },
     { type: 'attachment', uuid: 'a2', parentUuid: 'a1', timestamp: at(1), attachment: { type: 'credential_org', organizationUuid: 'x' } },
-    { type: 'attachment', uuid: 's1', parentUuid: 'a2', timestamp: at(1), attachment: { type: 'prompt_snapshot', systemPrompt: ['You are an agent.', 'You are inside OpenFilm.'], tools: null } },
+    { type: 'attachment', uuid: 's1', parentUuid: 'a2', timestamp: at(1), attachment: { type: 'prompt_snapshot', systemPrompt: ['You are an agent.', 'You are inside Zfilm.'], tools: null } },
     { type: 'assistant', uuid: 'r1a', parentUuid: 's1', timestamp: at(3), requestId: 'req1', effort: 'high',
       message: { id: 'msg1', model: 'claude-x', role: 'assistant', content: [{ type: 'thinking', thinking: 'plan' }], stop_reason: null, usage: { input_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 10, output_tokens: 1 } } },
     { type: 'assistant', uuid: 'r1b', parentUuid: 'r1a', timestamp: at(4), requestId: 'req1',
       wireToolInputs: { tu1: { command: 'openfilm look', description: 'as written' } },
       message: { id: 'msg1', model: 'claude-x', role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'openfilm look' } }], stop_reason: 'tool_use', usage: { input_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 10, output_tokens: 40, output_tokens_details: { thinking_tokens: 12 } } } },
     { type: 'user', uuid: 'u2', parentUuid: 'r1b', timestamp: at(6), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'frames saved', is_error: false }] } },
-    { type: 'attachment', uuid: 's2', parentUuid: 'u2', timestamp: at(6), attachment: { type: 'prompt_snapshot', systemPrompt: ['You are an agent.', 'You are inside OpenFilm.'], cliPrefix: 'You are Claude Code.', tools: [{ name: 'Bash', description: 'Run a command', schema: { type: 'object' } }] } },
+    { type: 'attachment', uuid: 's2', parentUuid: 'u2', timestamp: at(6), attachment: { type: 'prompt_snapshot', systemPrompt: ['You are an agent.', 'You are inside Zfilm.'], cliPrefix: 'You are Claude Code.', tools: [{ name: 'Bash', description: 'Run a command', schema: { type: 'object' } }] } },
     { type: 'assistant', uuid: 'r2', parentUuid: 's2', timestamp: at(9), requestId: 'req2',
       message: { id: 'msg2', model: 'claude-x', role: 'assistant', content: [{ type: 'text', text: 'Done.' }], stop_reason: 'end_turn', usage: { input_tokens: 2, cache_read_input_tokens: 150, output_tokens: 3 } } },
     { type: 'last-prompt', lastPrompt: 'Make a title' },
@@ -33,7 +33,7 @@ test("Claude Code's record: each request whole, with its system prompt, the cont
   const calls = claudeCallsOf(claudeSession());
   assert.equal(calls.length, 2, 'one call per request, not per block');
   const [first, second] = calls;
-  assert.equal(first.systemPrompt, 'You are an agent.\n\nYou are inside OpenFilm.');
+  assert.equal(first.systemPrompt, 'You are an agent.\n\nYou are inside Zfilm.');
   assert.equal(first.tools, null, 'no tools in the record yet');
   assert.deepEqual(first.messages, [
     { role: 'user', content: [{ type: 'text', text: 'Make a title' }] },
@@ -49,7 +49,7 @@ test("Claude Code's record: each request whole, with its system prompt, the cont
   assert.equal(first.startedAt, Date.parse(at(1)));
   assert.equal(first.ms, 3000, 'from what it was sent to its last block');
 
-  assert.equal(second.systemPrompt, 'You are Claude Code.\n\nYou are an agent.\n\nYou are inside OpenFilm.', 'the CLI prefix first');
+  assert.equal(second.systemPrompt, 'You are Claude Code.\n\nYou are an agent.\n\nYou are inside Zfilm.', 'the CLI prefix first');
   assert.deepEqual(second.tools, [{ name: 'Bash', description: 'Run a command', parameters: { type: 'object' } }]);
   assert.equal(second.messages.length, 4);
   assert.equal(second.messages[2].role, 'assistant');
@@ -68,7 +68,7 @@ test("Codex's rollout: base instructions, what Codex put in, each request closed
   const rows = [
     { timestamp: at(0), type: 'session_meta', payload: { id: 'th1', base_instructions: { text: 'You are Codex.' } } },
     { timestamp: at(0), type: 'turn_context', payload: { model: 'gpt-x', effort: 'high', approval_policy: 'never' } },
-    { timestamp: at(1), type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'You are inside OpenFilm.' }] } },
+    { timestamp: at(1), type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'You are inside Zfilm.' }] } },
     { timestamp: at(1), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<environment_context>cwd</environment_context>' }] } },
     { timestamp: at(1), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Make a title' }] } },
     { timestamp: at(3), type: 'response_item', payload: { type: 'reasoning', summary: [{ type: 'summary_text', text: 'look first' }], encrypted_content: 'zzz' } },
@@ -120,8 +120,8 @@ test("Codex's rollout: an older one closes requests by token_count; a compaction
 
 test('records are found where each agent keeps them, and a turn reads its own requests from them', () => {
   const home = mkdtempSync(join(tmpdir(), 'of-records-'));
-  const cwd = '/Users/me/Movies/OpenFilm/My film';
-  assert.equal(claudeProjectName(cwd), '-Users-me-Movies-OpenFilm-My-film');
+  const cwd = '/Users/me/Movies/Zfilm/My film';
+  assert.equal(claudeProjectName(cwd), '-Users-me-Movies-Zfilm-My-film');
   const claudeDir = join(home, 'claude', 'projects', claudeProjectName(cwd));
   mkdirSync(join(claudeDir, 'sess-1234', 'subagents'), { recursive: true });
   writeFileSync(join(claudeDir, 'sess-1234.jsonl'), jsonl(claudeSession()));

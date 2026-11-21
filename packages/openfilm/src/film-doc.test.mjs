@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { clipFade, clipIdFor, clipKind, clipSpan, fadeGain, filmHtml, kindOf, parseFilm, pictureRect, readFilm, readFilmFile, soundRole, sourceAt, srcHref } from './film-doc.mjs';
+import { clipFade, clipIdFor, clipKind, clipSpan, fadeGain, filmHtml, kindOf, lutsOf, parseFilm, pictureRect, readFilm, readFilmFile, soundRole, sourceAt, srcHref } from './film-doc.mjs';
 
 const film = (clip) => ({ stage: { w: 1920, h: 1080 }, tracks: [{ clips: [clip] }] });
 const problems = (value) => readFilm(value).problems.join('\n');
@@ -84,6 +84,14 @@ test('a src written by hand: its escapes are read, a bare % is a %, an address i
   assert.deepEqual(srcs(['<video src="https://x.test/a%20b.mp4"></video>']), ['https://x.test/a%20b.mp4']);
   assert.match(said(page([['<img src="assets/a#b.png#t=0,2">']])), /A # in the file's name is written %23/);
   assert.equal(srcHref('https://x.test/a.mp4?v=1#x'), 'https://x.test/a.mp4?v=1#x');
+});
+
+test('a numeric character reference outside Unicode is U+FFFD, as a browser reads it, not a crash', () => {
+  const { doc, problems: found } = readFilmFile(page([
+    ['<video src="a.mp4" class="x&#x110000;y&#0;z&#xD800;w"></video>'],
+  ]));
+  assert.deepEqual(found, []);
+  assert.equal(doc.tracks[0].clips[0].class, 'x\uFFFDy\uFFFDz\uFFFDw');
 });
 
 test('a new film is a whole page; a box at 0, 0 is written as one', () => {
@@ -344,6 +352,12 @@ test('fades are checked: seconds 0 or more, one entry of the clip\'s own, in + o
   assert.match(said(page([[`<video src="a.mp4#t=0,1" overrides='[{"fade":[1,1]}]'></video>`]])), /^film\.html:8: fade \[1, 1\] is longer than the clip/);
 });
 
+test('a page clip keeps a change for every layer the person changed, however many its page has', () => {
+  const many = Array.from({ length: 500 }, (_, i) => ({ at: `#d${i}`, t: [5, 5] }));
+  assert.equal(problems(film({ src: 'birthday.html', overrides: many })), '');
+  assert.match(problems(film({ src: 'birthday.html', overrides: { at: '#d0' } })), /overrides has to be a list\./);
+});
+
 test('fadeGain: a straight ramp in and out, fitted to the clip when longer than it', () => {
   assert.equal(fadeGain(0, 4, [1, 2]), 0);
   assert.equal(fadeGain(0.5, 4, [1, 2]), 0.5);
@@ -404,4 +418,29 @@ test('an attribute holding JSON (Studio\'s data-props) is written in single quot
   const back = readFilmFile(html);
   assert.deepEqual(back.problems, []);
   assert.equal(back.value.tracks[0].clips[0].attrs['data-props'], list);
+});
+
+test('a video clip\'s LUTs are its style\'s --of-lut url()s, in order, as written; another clip has none', () => {
+  const html = filmHtml({ stage: { w: 320, h: 180 }, tracks: [{ clips: [
+    { id: 'v', src: 'a.mov', at: 0, time: [0, 1], style: '--of-lut: url(looks/log.cube) url("looks/warm look.cube"); opacity: 0.5' },
+    { id: 'p', src: 'b.png', at: 1, time: [0, 1], style: '--of-lut: url(looks/log.cube)' },
+    { id: 'w', src: 'c.mp4', at: 2, time: [0, 1] },
+  ] }] });
+  const { doc, problems } = readFilmFile(html);
+  assert.deepEqual(problems, []);
+  assert.deepEqual(doc?.tracks[0].clips.map(lutsOf), [['looks/log.cube', 'looks/warm look.cube'], [], []]);
+  assert.deepEqual(lutsOf({ src: 'a.mov', style: "--of-lut: url( 'a.cube' )   url(b.cube); --of-lut: url(c.cube)" }), ['c.cube'], 'the last one written');
+  assert.deepEqual(lutsOf({ src: 'a.mov', style: '--of-lut: none' }), []);
+});
+
+test('each problem names the line it is on, however far into a long film', () => {
+  const clips = Array.from({ length: 600 }, (_, i) => `<video src="a.mp4#t=${i},${i + 1}" at="${i}"></video>`);
+  const text = page([clips, ['<p>a stray line</p>', '<video src="b.mp4#t=0,1" at="600"><source src="b.mp4"></video>']]);
+  const lines = text.split('\n');
+  const line = (needle) => lines.findIndex((l) => l.includes(needle)) + 1;
+  const start = performance.now();
+  const found = readFilmFile(text).problems;
+  assert.ok(performance.now() - start < 2000, 'read in a moment, not counted from the start for each clip');
+  assert.match(found.find((p) => p.includes('<p> in a track')) ?? '', new RegExp(`^film\\.html:${line('<p>a stray')}: `));
+  assert.match(found.find((p) => p.includes('holds nothing')) ?? '', new RegExp(`^film\\.html:${line('<source')}: `));
 });

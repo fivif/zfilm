@@ -156,7 +156,7 @@ test('a translation is cut to follow the original\'s pieces, at its own clause m
   /* too short to cut: the whole translation over every piece */
   const one = alignTranslation('It\'s Zfilm.', pieces);
   assert.deepEqual(one.map((p) => p.text), ['It\'s Zfilm.', 'It\'s Zfilm.', 'It\'s Zfilm.']);
-  assert.deepEqual(one[0], { text: 'It\'s Zfilm.', from: 0, to: 14 });
+  assert.deepEqual(one[0], { text: 'It\'s Zfilm.', from: 0, to: 11 });
   /* the other way: Chinese for English */
   const en = cut('To stop editing videos, I built a general video agent.', 4000);
   assert.deepEqual(alignTranslation('为了不再剪视频，我做了一个通用的视频 agent。', en).map((p) => subtitleEnd(p.text)), ['为了不再剪视频', '我做了一个通用的视频 agent']);

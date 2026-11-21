@@ -54,13 +54,14 @@ export async function withAgentRecord(found, prompt = null) {
 /**
  * The app's own preferences (`<dataDir>/preferences.json`): `developer`, each turn's log shown, and agents started with
  * their logging switches (off unless turned on); `changes`, what each turn changed, under its reply (on); `notify`, the
- * system's notifications of a turn done, stopped or waiting while the window is not in front (on; turn-notices.mjs).
+ * system's notifications of a turn done, stopped or waiting while the window is not in front (off until enabled;
+ * turn-notices.mjs).
  */
 export function readPreferences(dataDir) {
   try {
     const raw = JSON.parse(readFileSync(join(dataDir, 'preferences.json'), 'utf8'));
-    return { developer: raw.developer === true, changes: raw.changes !== false, notify: raw.notify !== false };
-  } catch { return { developer: false, changes: true, notify: true }; }
+    return { developer: raw.developer === true, changes: raw.changes !== false, notify: raw.notify === true };
+  } catch { return { developer: false, changes: true, notify: false }; }
 }
 
 /** how many turns' snapshots are kept at once: one per running turn, and a few whose end was never asked about */
@@ -112,8 +113,17 @@ export function registerChatIpc(ipcMain, { trusted, projects, dataDir, reveal, t
     void dropHold(kept.get(turnId)?.hold ?? null);
     kept.delete(turnId);
   };
-  handle('desktop:chat:snapshot', async ({ project: path, turnId }) => {
+  handle('desktop:chat:snapshot', async ({ project: path, turnId, recover }) => {
     const dir = await project(path);
+    if (recover === true) {
+      if (snapshots.get(turnId)?.dir === dir) return { ok: true };
+      const original = undoable.get(turnId);
+      if (original?.dir === dir) {
+        undoable.delete(turnId);
+        snapshots.set(turnId, original);
+        return { ok: true };
+      }
+    }
     const hold = holdDir(dir, turnId);
     /* links left from before (the app closed on a turn) are no use now: only the turns this launch knows keep theirs */
     const turnFiles = join(dir, '.film', 'cache', 'turn-files');

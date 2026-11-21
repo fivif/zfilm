@@ -112,23 +112,38 @@ export function useDesktopAttachments(project: string) {
     return items.map(({ item }) => item);
   }, [project, thumbnail]);
 
+  /** Things of this computer by their paths (a folder picked): pills at once, ready once the app says what each is. */
+  const addPaths = React.useCallback((paths: string[]): DesktopAttachment[] => {
+    const items = paths.map((path): DesktopAttachment => ({ id: newAttachmentPillId(), name: path.split(/[\\/]/).filter(Boolean).at(-1) ?? path, kind: 'document', mediaType: '', size: 0, state: 'pending' }));
+    setFiles((list) => [...list, ...items]);
+    void app.chat.describePaths(paths)
+      .then((found) => items.forEach((item, i) => {
+        const one = found[i];
+        if (!one || 'error' in one) patch(item.id, { state: 'failed', error: one?.error ?? 'That is not there.' });
+        else patch(item.id, { state: 'ready', path: one.path, ...(one.folder ? { folder: true } : { size: one.size ?? 0 }) });
+      }))
+      .catch((error: unknown) => items.forEach((item) => patch(item.id, { state: 'failed', error: error instanceof Error ? error.message : String(error) })));
+    return items;
+  }, []);
+
   /**
    * Hand over the files whose pills are sent, in that order; the composer is empty of files after, those whose pill
    * was taken out too (kept until now only so an undo could bring the pill back).
    */
   const current = React.useRef(files);
   current.current = files;
-  const take = React.useCallback((ids: readonly string[]): DesktopAttachment[] => {
+  const take = React.useCallback((ids: readonly string[], keepOtherDrafts: ReadonlySet<string>): DesktopAttachment[] => {
     const byId = new Map(current.current.map((f) => [f.id, f]));
     const taken = ids.flatMap((id) => byId.get(id) ?? []);
     /* sent: the message keeps their thumbnails, the agent their paths */
-    for (const f of current.current) if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
-    current.current = [];
-    setFiles([]);
+    const kept = current.current.filter((f) => keepOtherDrafts.has(f.id) && !ids.includes(f.id));
+    for (const f of current.current) if (!kept.includes(f) && f.previewUrl) URL.revokeObjectURL(f.previewUrl);
+    current.current = kept;
+    setFiles(kept);
     return taken;
   }, []);
 
-  return { files, add, take };
+  return { files, add, addPaths, take };
 }
 
 /** What still keeps the message from going: a file still on its way, or one that could not be attached. */
@@ -145,8 +160,13 @@ export function attachmentBlocker(files: readonly DesktopAttachment[], t: (path:
  * rest go by their path only). Read now, as the message goes: a folder's worth of photos would not all be sent anyway.
  */
 export async function attachedPictures(files: readonly DesktopAttachment[], room: number): Promise<PromptImage[]> {
-  const wanted = files.filter((f) => f.kind === 'image' && f.file).slice(0, Math.max(0, room));
-  const made = await Promise.all(wanted.map((f) => attachedPicture(f.file!)));
+  const wanted = files.filter((f) => f.kind === 'image' && (f.file || f.thumb)).slice(0, Math.max(0, room));
+  const made = await Promise.all(wanted.map((f) => {
+    if (f.file) return attachedPicture(f.file);
+    // A message stopped before sending and reopened after a restart still has its thumbnail and the original file's path.
+    const parts = /^data:(image\/(?:jpeg|png|webp));base64,([\w+/=]+)$/.exec(f.thumb ?? '');
+    return parts ? { mimeType: parts[1]!, data: parts[2]! } : null;
+  }));
   return made.filter((picture): picture is PromptImage => picture !== null);
 }
 

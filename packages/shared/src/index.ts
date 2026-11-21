@@ -1,5 +1,5 @@
 /**
- * @openfilm/shared: what OpenFilm's clients share.
+ * @openfilm/shared: what Zfilm's clients share.
  *
  *   contract / turn / video   a turn of the chat, what it made and the events a client sees
  *   agent-activity            how an agent's tool calls read in the chat

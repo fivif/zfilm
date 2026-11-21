@@ -2,13 +2,14 @@
 // @ts-check
 /**
  * The library's voices (library/voices.json): the ready-made voices of the voice-over services Zfilm offers
- * (ElevenLabs Eleven v4, Inworld TTS-2, Cartesia Sonic 3.6), as each service's own API lists them, each with its
- * service's own sample, made small (library/voices/<service>/<voice>.m4a).
+ * (ElevenLabs Eleven v4, Inworld TTS-2, Cartesia Sonic 3.6, Doubao TTS 2.0), as each service lists them, each with its
+ * service's own sample, or an AAC preview synthesized in the same voice.
  *
  *   ELEVENLABS_API_KEY=… INWORLD_API_KEY=… CARTESIA_API_KEY=… node scripts/library-voices.mjs [--make-samples]
+ *   DOUBAO_SPEECH_API_KEY=… node scripts/library-voices.mjs --provider=doubao [--make-samples]
  *
- * Listing voices and their samples costs nothing with any of them. A sample already here is kept; a service without
- * a key keeps what voices.json had for it.
+ * Listing voices and samples is free. Existing previews are reused. ElevenLabs, Inworld, and Cartesia keep their
+ * current catalog entries when no key is set.
  *
  *   ElevenLabs  its own voices (premade), every voice its Voice Library features, and the most used of the library in
  *               each language (its twenty thousand are too many to browse): only those billed at its usual rate,
@@ -16,14 +17,19 @@
  *   Inworld     all its own voices
  *   Cartesia    all its public voices; a voice it gives no sample of has one made with `--make-samples` (Sonic 3.6
  *               says LINES in its language, a few cents for them all), else none
+ *   Doubao      both official TTS 2.0 tables, including multilingual voices, without credentials. Official recordings
+ *               come from the provider's CDN. With `--make-samples`, voices without a recording speak one sentence.
  *
  * `featured`: the service picked it (ElevenLabs' own voices and the ones its library features); `uses`: how much it is
  * used, where the service says (ElevenLabs: characters spoken in a year), to list the most used first.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { doubaoVoices } from './doubao-voices.mjs';
+import { doubaoTts } from '../studio/server/providers/doubao-tts.mjs';
+import { tempPath, writeAtomic } from '../studio/server/atomic.mjs';
 
 const LIBRARY = fileURLToPath(new URL('../library/', import.meta.url));
 const OUT = join(LIBRARY, 'voices.json');
@@ -33,7 +39,7 @@ const SAMPLE_SECONDS = 15;
 /**
  * @typedef {{ provider: string, id: string, name: string, description: string | null, gender: 'm' | 'f' | 'n' | null,
  *   age: 'young' | 'middle' | 'old' | null, language: string | null, accent: string | null, tags: string[], sample: string | null,
- *   featured: boolean, uses: number | null }} Voice
+ *   featured: boolean, uses: number | null, sampleSource?: string | null }} Voice
  * @typedef {{ voice: Voice, fetch: () => Promise<Uint8Array | null> }} Found
  */
 
@@ -42,6 +48,7 @@ const PROVIDERS = [
   { id: 'elevenlabs', name: 'ElevenLabs', models: [{ id: 'eleven_v4', name: 'Eleven v4' }, { id: 'eleven_v4_turbo', name: 'Eleven v4 Turbo' }] },
   { id: 'inworld', name: 'Inworld', models: [{ id: 'inworld-tts-2', name: 'TTS-2' }, { id: 'inworld-tts-2-flash', name: 'TTS-2 Flash' }] },
   { id: 'cartesia', name: 'Cartesia', models: [{ id: 'sonic-3.6', name: 'Sonic 3.6' }] },
+  { id: 'doubao', name: 'Doubao', models: [{ id: 'seed-tts-2.0', name: 'Doubao TTS 2.0' }] },
 ];
 
 const sleep = (/** @type {number} */ ms) => new Promise((done) => setTimeout(done, ms));
@@ -211,17 +218,76 @@ const LISTS = { elevenlabs: [elevenlabs, 'ELEVENLABS_API_KEY'], inworld: [inworl
 
 /** The sample made small: one channel, 64 kbps AAC, its first seconds. @param {Uint8Array} raw @param {string} out */
 function small(raw, out) {
-  const tmp = `${out}.in`;
-  writeFileSync(tmp, raw);
+  const input = tempPath(out);
+  const tmp = `${input}.m4a`;
   try {
-    execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', tmp, '-t', String(SAMPLE_SECONDS), '-ac', '1', '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', out]);
-  } finally { rmSync(tmp, { force: true }); }
+    writeFileSync(input, raw);
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', input, '-t', String(SAMPLE_SECONDS), '-ac', '1', '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', tmp]);
+    renameSync(tmp, out);
+  } finally {
+    rmSync(input, { force: true });
+    rmSync(tmp, { force: true });
+  }
+}
+
+/** Reuse existing AAC previews and synthesize only voices with no public recording. @param {Voice[]} previous */
+async function doubao(previous) {
+  const voices = await doubaoVoices();
+  const key = MAKE_SAMPLES ? process.env.DOUBAO_SPEECH_API_KEY : undefined;
+  const kept = new Map(previous.map((v) => [v.id, v.sample]));
+  const official = voices.filter((v) => v.sampleSource).length;
+  const missing = voices.filter((voice) => {
+    if (voice.sample) return false;
+    const rel = `voices/doubao/${fileName(voice.id)}.m4a`;
+    if (kept.get(voice.id) === rel || existsSync(join(LIBRARY, rel))) voice.sample = rel;
+    return !voice.sample;
+  });
+  console.log(`Doubao: ${voices.length} voices, ${official} official samples, ${missing.length} without a preview`);
+  if (MAKE_SAMPLES && !key && missing.length) {
+    console.warn('Doubao needs DOUBAO_SPEECH_API_KEY to make the missing previews.');
+    process.exitCode = 1;
+  }
+  if (!key || !missing.length) return voices;
+
+  mkdirSync(join(LIBRARY, 'voices', 'doubao'), { recursive: true });
+  let next = 0;
+  let made = 0;
+  await Promise.all(Array.from({ length: 3 }, async () => {
+    while (next < missing.length) {
+      const voice = missing[next++];
+      const { text, language } = sampleLine(voice);
+      const sentence = [...new Intl.Segmenter(language, { granularity: 'sentence' }).segment(text)].at(-1)?.segment.trim() || text;
+      const rel = `voices/doubao/${fileName(voice.id)}.m4a`;
+      try {
+        const result = await doubaoTts({ text: sentence, voice: voice.id, language, out: 'preview' }, {
+          key, model: 'seed-tts-2.0', root: '', signal: AbortSignal.timeout(30_000), say: () => {},
+        });
+        const sample = result.files[0];
+        if (!sample || !('bytes' in sample) || !sample.bytes?.length) throw new Error('No preview audio returned.');
+        small(sample.bytes, join(LIBRARY, rel));
+        voice.sample = rel;
+        made++;
+      } catch (error) {
+        console.warn(`Doubao: ${voice.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }));
+  console.log(`Doubao: made ${made} of ${missing.length} missing previews`);
+  if (made < missing.length) process.exitCode = 1;
+  return voices;
 }
 
 const before = existsSync(OUT) ? JSON.parse(readFileSync(OUT, 'utf8')) : { voices: [] };
+const previousDoubao = /** @type {Voice[]} */ (before.voices).filter((v) => v.provider === 'doubao');
 /** @type {Voice[]} */
 const voices = [];
 for (const provider of PROVIDERS) {
+  const selected = process.argv.find((arg) => arg.startsWith('--provider='))?.slice('--provider='.length);
+  if (selected && selected !== provider.id) { voices.push(...before.voices.filter((/** @type {Voice} */ v) => v.provider === provider.id)); continue; }
+  if (provider.id === 'doubao') {
+    voices.push(...await doubao(previousDoubao));
+    continue;
+  }
   const [list, env] = /** @type {[(key: string) => Promise<Found[]>, string]} */ (LISTS[/** @type {keyof typeof LISTS} */ (provider.id)]);
   const key = process.env[env];
   if (!key) {
@@ -250,9 +316,12 @@ for (const provider of PROVIDERS) {
 
 /* Mandarin as the other services say it (ElevenLabs says `cmn`) */
 for (const v of voices) if (v.language) v.language = v.language.replace(/^cmn\b/, 'zh');
-/* within each service: its picks, then those with a sample to hear, then the most used, then by name */
+/* Keep Doubao's existing order because the first voice in a language can be a Canvas or dialogue default. */
+const doubaoOrder = new Map(previousDoubao.map((v, index) => [v.id, index]));
+const doubaoRank = (/** @type {Voice} */ v) => v.provider === 'doubao' ? doubaoOrder.get(v.id) ?? doubaoOrder.size : 0;
+/* Within each service: its picks, existing Doubao voices, previews, most used, then names. */
 const order = PROVIDERS.map((p) => p.id);
 voices.sort((a, b) => order.indexOf(a.provider) - order.indexOf(b.provider) || Number(b.featured) - Number(a.featured)
-  || Number(Boolean(b.sample)) - Number(Boolean(a.sample)) || (b.uses ?? 0) - (a.uses ?? 0) || a.name.localeCompare(b.name));
-writeFileSync(OUT, `${JSON.stringify({ version: 1, providers: PROVIDERS, voices }, null, 1)}\n`);
+  || doubaoRank(a) - doubaoRank(b) || Number(Boolean(b.sample)) - Number(Boolean(a.sample)) || (b.uses ?? 0) - (a.uses ?? 0) || a.name.localeCompare(b.name));
+await writeAtomic(OUT, `${JSON.stringify({ version: 1, providers: PROVIDERS, voices }, null, 1)}\n`);
 console.log(`${voices.length} voices → ${OUT}`);

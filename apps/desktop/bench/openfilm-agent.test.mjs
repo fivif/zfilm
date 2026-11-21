@@ -6,7 +6,7 @@ import { chromium } from 'playwright-core';
 import shellConfig from '../shell/vite.config.ts';
 import { OPENFILM_MODELS } from '../src/openfilm-models.mjs';
 
-test('OpenFilm follows Claude under Your agents, shares account actions and never offers CLI setup', { timeout: 60_000 }, async () => {
+test('Zfilm follows Claude under Your agents, shares account actions and never offers CLI setup', { timeout: 60_000 }, async () => {
   const server = await createServer({ ...shellConfig, configFile: false,
     root: fileURLToPath(new URL('..', import.meta.url)), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error',
     plugins: [...shellConfig.plugins, { name: 'openfilm-agent-fixture', configureServer(app) {
@@ -33,7 +33,7 @@ test('OpenFilm follows Claude under Your agents, shares account actions and neve
           models: models.map((m) => ({ ...m, shown: true, available: true, levels: ['low', 'high'], effort: 'high' })) };
         let agents = [
           { id: 'codex', name: 'Codex', shown: true, status: 'ready' },
-          { id: 'openfilm', name: 'OpenFilm', shown: true, status: 'sign-in', signOut: true, openfilm: modelSettings },
+          { id: 'openfilm', name: 'Zfilm', shown: true, status: 'sign-in', signOut: true, openfilm: modelSettings },
           { id: 'claude', name: 'Claude Code', shown: true, status: 'sign-in' },
           { id: 'byok', name: 'Own key', shown: false, status: 'key' },
         ];
@@ -51,7 +51,7 @@ test('OpenFilm follows Claude under Your agents, shares account actions and neve
           disconnect: async (id) => { calls.push(['disconnect', id]); publish({ status: 'sign-in', account: null }); return { ok: true }; },
           switchAccount: async (id) => { calls.push(['switch', id]); publish({ status: 'waiting', account: null }); return { ok: true }; },
           setShown: async (id, shown) => { calls.push(['shown', id, shown]); publish({ shown }); },
-          saveOpenFilmModels: async (config) => {
+          saveZfilmModels: async (config) => {
             saved.push(config);
             publish({ configurationRevision: saved.length, openfilm: { ...modelSettings, ...config,
               models: config.order.map((id) => ({ ...modelSettings.models.find((m) => m.id === id), shown: !config.hidden.includes(id) })) } });
@@ -65,14 +65,14 @@ test('OpenFilm follows Claude under Your agents, shares account actions and neve
       }, { locale, models: OPENFILM_MODELS });
       await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/openfilm-agent-ui`);
       await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
-      const row = page.locator('div.py-4').filter({ has: page.getByText('OpenFilm', { exact: true }) });
+      const row = page.locator('div.py-4').filter({ has: page.getByText('Zfilm', { exact: true }) });
       await row.waitFor({ timeout: 10_000 }).catch(async (e) => {
         throw new Error(`${e.message}\nPage errors: ${JSON.stringify(errors)}\n${await page.locator('body').innerText()}`);
       });
-      assert.deepEqual(await page.locator('div.py-4').evaluateAll((rows) => rows.slice(0, 3).map((r) => r.querySelector('span[class~="text-[15px]"]')?.textContent)), ['Codex', 'Claude Code', 'OpenFilm']);
+      assert.deepEqual(await page.locator('div.py-4').evaluateAll((rows) => rows.slice(0, 3).map((r) => r.querySelector('span[class~="text-[15px]"]')?.textContent)), ['Codex', 'Claude Code', 'Zfilm']);
       assert.equal(await row.getByRole('button', { name: /Connection help|连接帮助/ }).count(), 0);
       assert.doesNotMatch(await row.innerText(), /与服务商共享账号和余额|Same account and balance as Services/);
-      const info = row.getByRole('button', { name: zh ? 'OpenFilm 信息与模型' : 'OpenFilm info and models', exact: true });
+      const info = row.getByRole('button', { name: zh ? 'Zfilm 信息与模型' : 'Zfilm info and models', exact: true });
       await row.getByText(zh ? '未连接' : 'Not connected', { exact: true }).waitFor();
       assert.equal(await info.isVisible(), true);
       await page.evaluate(() => window.openfilmAgentFixture.publish({ error: 'API answered 401' }));
@@ -86,7 +86,7 @@ test('OpenFilm follows Claude under Your agents, shares account actions and neve
       await page.evaluate(() => window.openfilmAgentFixture.publish({ status: 'ready', account: { method: 'other', email: 'shared@example.com' } }));
       await row.getByText(/shared@example.com/).waitFor();
       await info.click();
-      const dialog = page.getByRole('dialog', { name: 'OpenFilm', exact: true });
+      const dialog = page.getByRole('dialog', { name: 'Zfilm', exact: true });
       const rows = dialog.locator('li[data-model-id]');
       assert.deepEqual(await rows.evaluateAll((items) => items.map((item) => item.dataset.modelId)), OPENFILM_MODELS.map((m) => m.id));
       assert.match(await dialog.innerText(), zh ? /与服务商共享账号和余额/ : /Same account and balance as Services/);
@@ -95,6 +95,8 @@ test('OpenFilm follows Claude under Your agents, shares account actions and neve
       const dragLive = async (name, index) => {
         await rows.evaluateAll((items) => Promise.all(items.flatMap((item) => item.getAnimations()).map((animation) => animation.finished.catch(() => {}))));
         const handle = dialog.getByRole('button', { name: zh ? `调整 ${name} 的顺序` : `Reorder ${name}`, exact: true });
+        /* the list scrolls: the row it goes to in view first, then its handle */
+        await rows.nth(index).scrollIntoViewIfNeeded();
         await handle.scrollIntoViewIfNeeded();
         const start = await handle.boundingBox();
         const id = OPENFILM_MODELS.find((m) => m.name === name).id;
@@ -115,14 +117,14 @@ test('OpenFilm follows Claude under Your agents, shares account actions and neve
         await page.mouse.up();
         assert.equal(await rows.nth(index).getAttribute('data-model-id'), id, 'drop keeps the previewed order');
       };
-      await dragLive('Claude Opus 5.5', 1);
+      await dragLive('Claude Opus 5.5', 2);
       await dialog.getByRole('switch', { name: zh ? '在对话中显示 GPT-6 Luna' : 'Show GPT-6 Luna in chat', exact: true }).click();
-      await dragLive('DeepSeek V4.1 Flash', 1);
+      await dragLive('GPT-6.2 Astra', 1);
       await rows.evaluateAll((items) => Promise.all(items.flatMap((item) => item.getAnimations()).map((animation) => animation.finished.catch(() => {}))));
       await page.screenshot({ path: `/tmp/openfilm-models-${locale}.png`, fullPage: true });
       const expectedOrder = await rows.evaluateAll((items) => items.map((item) => item.dataset.modelId));
-      assert.equal(expectedOrder[0], 'anthropic/claude-sonnet-5.5');
-      assert.equal(expectedOrder[1], 'deepseek/deepseek-v4.1-flash-1017');
+      assert.equal(expectedOrder[0], 'anthropic/claude-fable-5.2');
+      assert.equal(expectedOrder[1], 'openai/gpt-6.2-astra');
       await dialog.getByRole('button', { name: zh ? '保存' : 'Save', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
       assert.deepEqual(await page.evaluate(() => window.openfilmAgentFixture.saved.at(-1)), { order: expectedOrder, hidden: ['openai/gpt-6-luna'] });
@@ -131,7 +133,14 @@ test('OpenFilm follows Claude under Your agents, shares account actions and neve
       const menu = page.getByRole('button', { name: 'Claude Sonnet 5.5', exact: true }).locator('..');
       await menu.getByRole('button', { name: 'Claude Sonnet 5.5', exact: true }).waitFor();
       assert.deepEqual(await menu.getByRole('button').allTextContents(), expectedOrder.filter((id) => id !== 'openai/gpt-6-luna').map((id) => OPENFILM_MODELS.find((m) => m.id === id).name));
-      assert.doesNotMatch(await page.locator('body').innerText(), /MiMo|Astra|Fable/);
+      const providerIcons = [];
+      for (const name of ['Gemini 4 Carbon', 'Hy4 Flash']) {
+        const icon = menu.getByRole('button', { name, exact: true }).locator('svg').first();
+        assert.equal(await icon.getAttribute('fill'), 'currentColor');
+        providerIcons.push(await icon.locator('path').getAttribute('d'));
+      }
+      assert.notEqual(...providerIcons, 'Gemini and Hy4 each use their own provider icon');
+      assert.doesNotMatch(await page.locator('body').innerText(), /MiMo|GPT-6 Astra|Fable 5\.1/);
       await page.mouse.click(1050, 740);
       await info.click();
       assert.deepEqual(await rows.evaluateAll((items) => items.map((item) => item.dataset.modelId)), expectedOrder, 'reopening keeps the saved order');
@@ -139,20 +148,20 @@ test('OpenFilm follows Claude under Your agents, shares account actions and neve
       assert.deepEqual(await rows.evaluateAll((items) => items.map((item) => item.dataset.modelId)), OPENFILM_MODELS.map((m) => m.id));
       await page.keyboard.press('Escape');
       // A temporarily old cloud catalog must not silently hide enabled models.
-      await page.evaluate(() => window.openfilmAgentFixture.available(['anthropic/claude-opus-5.5', 'anthropic/claude-sonnet-5.5', 'openai/gpt-6.1-sol']));
+      await page.evaluate(() => window.openfilmAgentFixture.available(['anthropic/claude-opus-5.5', 'anthropic/claude-sonnet-5.5', 'openai/gpt-6.2-sol']));
       await page.locator('[data-model-picker] button').first().click();
       await page.getByRole('button', { name: /^(Model|模型) / }).hover();
       const partial = page.getByRole('button', { name: 'Claude Opus 5.5', exact: true }).locator('..');
-      assert.equal(await partial.getByRole('button').count(), 7, 'all enabled models are listed even if the service is older');
-      assert.equal(await partial.locator('button:disabled').count(), 4, 'unavailable models are explicit and cannot send invalid requests');
+      assert.equal(await partial.getByRole('button').count(), OPENFILM_MODELS.length, 'all enabled models are listed even if the service is older');
+      assert.equal(await partial.locator('button:disabled').count(), OPENFILM_MODELS.length - 3, 'unavailable models are explicit and cannot send invalid requests');
       assert.match(await partial.innerText(), zh ? /服务待更新/ : /Awaiting update/);
       assert.doesNotMatch(await partial.innerText(), /暂不可用|Unavailable/);
       await page.mouse.click(1050, 740);
       await info.click();
       await dialog.waitFor();
       assert.match(await dialog.innerText(), zh ? /开关控制模型是否在对话菜单中显示/ : /Switches control which models appear in chat/);
-      assert.equal(await dialog.getByText(zh ? '服务待更新' : 'Awaiting update', { exact: true }).count(), 4);
-      assert.equal(await dialog.locator('[role="switch"][aria-checked="true"]').count(), 7, 'service support does not turn off the visibility switches');
+      assert.equal(await dialog.getByText(zh ? '服务待更新' : 'Awaiting update', { exact: true }).count(), OPENFILM_MODELS.length - 3);
+      assert.equal(await dialog.locator('[role="switch"][aria-checked="true"]').count(), OPENFILM_MODELS.length, 'service support does not turn off the visibility switches');
       await page.screenshot({ path: `/tmp/openfilm-pending-service-${locale}.png`, fullPage: true });
       await page.keyboard.press('Escape');
       await row.getByRole('switch').click();

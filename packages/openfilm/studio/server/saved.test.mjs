@@ -1,20 +1,26 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { makeFolder, moveFile } from './files.mjs';
-import { bringClip, libraryRel, listLibrary, saveClip, saveFile, saveGroup, takeSaved } from './saved.mjs';
+import { bringIn, makeFolder, moveFile, readable, trashFile } from './files.mjs';
+import { bringClip, fittedKeyframes, libraryRel, libraryRoot, listLibrary, saveClip, saveFile, saveGroup, takeSaved } from './saved.mjs';
 
 let saved;
 let before;
+let beforeHome;
 beforeEach(() => {
   before = process.env.OPENFILM_SAVED;
-  saved = join(mkdtempSync(join(tmpdir(), 'of-saved-')), 'Saved');
+  beforeHome = process.env.OPENFILM_HOME;
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'of-saved-')));
+  saved = join(base, 'Saved');
   process.env.OPENFILM_SAVED = saved;
+  /* the places the person linked are kept in Studio's home */
+  process.env.OPENFILM_HOME = join(base, 'home');
 });
 afterEach(() => {
   if (before === undefined) delete process.env.OPENFILM_SAVED; else process.env.OPENFILM_SAVED = before;
+  if (beforeHome === undefined) delete process.env.OPENFILM_HOME; else process.env.OPENFILM_HOME = beforeHome;
 });
 
 /** A project with a title page that loads its own CSS, a picture and a page in a frame, beside another clip's page. */
@@ -70,7 +76,7 @@ test('the library lists files of any kind and folders as a project\'s media, a b
   writeFileSync(join(saved, 'notes.pdf'), 'pdf');
   writeFileSync(join(saved, '.DS_Store'), 'x');
   await saveClip(root, 'title', { name: 'Lower third', durationMs: 2000, w: 400, h: 200, into: 'saved/Logos' });
-  const { files, folders, pages } = await listLibrary();
+  const { files, folders, pages } = await listLibrary({ recursive: true });
   assert.deepEqual(folders, ['saved/Logos']);
   assert.deepEqual(pages, []);
   assert.deepEqual(files.map((f) => [f.path, f.kind]), [['saved/Logos/acme.svg', 'image'], ['saved/Logos/Lower third', 'page'], ['saved/notes.pdf', 'other']]);
@@ -81,7 +87,7 @@ test('the library lists files of any kind and folders as a project\'s media, a b
   });
   /* a clip of a video or a sound: its file, which the pane plays and pictures (its waveform) as the file itself */
   await saveClip(root, 'v', { name: 'Shot' });
-  const shot = (await listLibrary()).files.find((f) => f.path === 'saved/Shot');
+  const shot = (await listLibrary({ recursive: true })).files.find((f) => f.path === 'saved/Shot');
   assert.equal(shot?.kind, 'video');
   assert.equal(/** @type {any} */ (shot?.saved)?.file, 'saved/Shot/files/assets/v.mp4');
 });
@@ -133,9 +139,39 @@ test('clips saved together keep their tracks and times from the first, and the l
     [1, 6, 'saved/Opener/assets/v.mp4', null],
     [2, 0, 'saved/Opener/assets/v.mp4', 'L'],
   ]);
-  const listed = (await listLibrary()).files.find((f) => f.path === path);
+  const listed = (await listLibrary({ recursive: true })).files.find((f) => f.path === path);
   assert.deepEqual([listed?.kind, listed?.saved?.kind, listed?.saved?.count], ['page', 'group', 4]);
   await assert.rejects(saveGroup(root, ['title', 'gone']), /not all in the film/);
+});
+
+test('a file or folder linked into the library is listed and read where it is kept; one taken comes in without a copy of its bytes where it can', async () => {
+  const away = realpathSync(mkdtempSync(join(tmpdir(), 'of-saved-away-')));
+  mkdirSync(join(away, 'Footage', 'day 1'), { recursive: true });
+  writeFileSync(join(away, 'Footage', 'day 1', 'a.mp4'), 'mp4');
+  writeFileSync(join(away, 'cover.png'), 'png');
+  const lib = await libraryRoot();
+  mkdirSync(join(lib, 'Shoots'));
+  assert.deepEqual(await bringIn(lib, 'Shoots', [join(away, 'Footage'), join(away, 'cover.png')], 'link', { anywhere: true }), ['Shoots/Footage', 'Shoots/cover.png']);
+  const outer = await listLibrary({ recursive: true });
+  const opened = await listLibrary({ at: 'saved/Shoots/Footage/day 1' });
+  const files = [...outer.files, ...opened.files];
+  const folders = [...outer.folders, 'saved/Shoots/Footage/day 1'];
+  const links = outer.links;
+  assert.deepEqual(folders, ['saved/Shoots', 'saved/Shoots/Footage', 'saved/Shoots/Footage/day 1']);
+  assert.deepEqual(files.map((f) => [f.path, f.size]), [['saved/Shoots/cover.png', 3], ['saved/Shoots/Footage/day 1/a.mp4', 3]]);
+  assert.deepEqual(Object.keys(links).sort(), ['saved/Shoots/Footage', 'saved/Shoots/cover.png']);
+  assert.equal(readFileSync(readable(lib, 'Shoots/Footage/day 1/a.mp4'), 'utf8'), 'mp4');
+  /* a link the person did not make leads nowhere it may be read */
+  symlinkSync(tmpdir(), join(lib, 'Shoots', 'stray'));
+  assert.equal((await listLibrary({ recursive: true })).links['saved/Shoots/stray'].missing, true);
+  assert.throws(() => readable(lib, 'Shoots/stray'));
+  const other = mkdtempSync(join(tmpdir(), 'of-saved-other-'));
+  const taken = await takeSaved(other, 'saved/Shoots/Footage/day 1/a.mp4');
+  assert.equal(taken.path, 'assets/a.mp4');
+  assert.equal(readFileSync(join(other, 'assets', 'a.mp4'), 'utf8'), 'mp4');
+  /* a link taken away is the link, the file where it is kept stays */
+  await trashFile(lib, 'Shoots/cover.png');
+  assert.ok(existsSync(join(away, 'cover.png')) && !existsSync(join(lib, 'Shoots', 'cover.png')));
 });
 
 test('a place in the library is named from saved/', () => {
@@ -177,4 +213,66 @@ test('a filter of Zfilm\'s library is taken as its layer page under the filter\'
   assert.ok(existsSync(join(root, 'saved/openfilm/filters-bw/layer.html')));
   /* the layer itself, and a folder of the filters' pictures, are what they are */
   await assert.rejects(takeSaved(root, 'openfilm/filters/nothing-here/deeper'));
+});
+
+/** A project whose clips move by @keyframes in film.html's style. */
+function moving(extra = '') {
+  const root = mkdtempSync(join(tmpdir(), 'of-saved-moving-'));
+  writeFileSync(join(root, 'a.jpg'), 'jpg');
+  writeFileSync(join(root, 'film.html'), `<meta name="viewport" content="width=1920, height=1080">
+<style>
+@keyframes pop { from { scale: 2; } to { scale: 1; } }
+@keyframes unused { from { opacity: 0; } to { opacity: 1; } }
+${extra}
+</style>
+<section>
+  <img id="one" src="a.jpg#t=0,2" style="animation: pop .5s ease-out both">
+  <img id="two" src="a.jpg#t=0,2" at="2">
+</section>
+`);
+  return root;
+}
+
+test('saved clips keep the @keyframes they play, and only those', async () => {
+  const root = moving();
+  const group = await saveGroup(root, ['one', 'two'], { name: 'Moving' });
+  const about = JSON.parse(readFileSync(join(saved, 'Moving', 'saved.json'), 'utf8'));
+  assert.deepEqual(Object.keys(about.keyframes), ['pop']);
+  await saveClip(root, 'one', { name: 'One' });
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(saved, 'One', 'saved.json'), 'utf8')).keyframes), ['pop']);
+  await saveClip(root, 'two', { name: 'Two' });
+  assert.equal(JSON.parse(readFileSync(join(saved, 'Two', 'saved.json'), 'utf8')).keyframes, undefined);
+
+  const taken = await takeSaved(moving(), group);
+  assert.deepEqual(Object.keys(taken.keyframes), ['pop']);
+  assert.match(taken.clips[0].clip.style, /animation: pop /);
+});
+
+test('a saved clip\'s @keyframes never change what the film\'s own clips play', async () => {
+  const group = await saveGroup(moving(), ['one'], { name: 'Moving' });
+  /* a film with another `pop`: the bundle's takes a name of its own, its clip with it */
+  const root = moving();
+  writeFileSync(join(root, 'film.html'), readFileSync(join(root, 'film.html'), 'utf8').replace('scale: 2;', 'scale: 3;'));
+  const taken = await takeSaved(root, group);
+  assert.deepEqual(Object.keys(taken.keyframes), ['pop-2']);
+  assert.match(taken.clips[0].clip.style, /animation: pop-2 /);
+  assert.match(taken.keyframes['pop-2'], /scale: 2/);
+  /* the same `pop` already there: nothing new */
+  const same = await takeSaved(moving(), group);
+  assert.deepEqual(Object.keys(same.keyframes), ['pop']);
+});
+
+test('a renamed @keyframes changes only the name an animation plays, not a property or a url that reads the same', () => {
+  const { keyframes, named } = fittedKeyframes({ rotate: 'to { rotate: 1turn; }' }, { rotate: 'to { rotate: -1turn; }' });
+  assert.deepEqual(Object.keys(keyframes), ['rotate-2']);
+  const clip = named({ src: 'a.jpg', style: 'rotate: 10deg; background: url(rotate.png); animation: rotate 1s both' });
+  assert.match(clip.style, /rotate: 10deg/);
+  assert.match(clip.style, /url\(rotate\.png\)/);
+  assert.match(clip.style, /animation: rotate-2 1s both/);
+});
+
+test('a clip\'s own motion keyframes keep their shape when renamed, so they are still read as a clip\'s own', () => {
+  const { keyframes, named } = fittedKeyframes({ 'x--scale': 'from { scale: 2; } to { scale: 1; }' }, { 'x--scale': 'from { scale: 3; } to { scale: 1; }' });
+  assert.deepEqual(Object.keys(keyframes), ['x-2--scale']);
+  assert.match(named({ src: 'a.jpg', style: 'animation: x--scale 1s both' }).style, /animation: x-2--scale 1s both/);
 });

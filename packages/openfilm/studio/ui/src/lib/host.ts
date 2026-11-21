@@ -8,7 +8,7 @@ import type { LibraryImportHost } from '../library-import/types';
  * such as the button that introduces the desktop app.
  */
 /** A tab of the app's window (`tabs` below): a project's, its title as Studio shows it. */
-export interface HostTab { id: string; projectId: string; title: string; active: boolean; working: boolean; asking: boolean; exporting: number | null }
+export interface HostTab { id: string; projectId: string; title: string; active: boolean; working: boolean; asking: boolean; exporting: number | null; exportStage?: string }
 
 /** Settings → Developer, as the app keeps it (`developer` below). */
 export interface HostDeveloper { logs: boolean; changes: boolean }
@@ -16,6 +16,12 @@ export interface HostDeveloper { logs: boolean; changes: boolean }
 /** The project identity and current folder shared with an embedded chat. */
 export interface HostProject { id: string; name: string; path: string }
 export type HostWritingModel = { agent: HostAgentId; options: Record<string, string | number | boolean> };
+
+/** A connector as the app has it: signed in or not (run out: `expired`), a sign-in under way, what failed, its tools. */
+export interface HostConnector {
+  id: string; connected: boolean; signingIn: boolean; expired: boolean; error?: string; server?: string; connectedAt?: number;
+  tools: Array<{ name: string; title: string; description: string; readOnly: boolean }>;
+}
 
 export interface StudioHost {
   /** the version of this interface the app speaks */
@@ -26,6 +32,8 @@ export interface StudioHost {
   name?: string;
   /** A successful rename, here or in another page: the chat keeps its identity but uses the new name and folder. */
   projectChanged?: (project: HostProject) => void;
+  /** The workspace the app's conversation is looking at, with the editors available in this project. */
+  workbenchChanged?: (state: HostWorkbench) => void;
   /**
    * The window has no title bar of its own: Studio's top bar is where the window is dragged, and `inset` pixels at its
    * left (macOS) and `insetRight` at its right (Windows) are left free for the window's controls. `onChange` tells of a
@@ -39,13 +47,18 @@ export interface StudioHost {
    * Studio's things can also be dragged into the app's composer: they carry STUDIO_REF_TYPE (see there).
    */
   refer?: (ref: StudioRef) => void;
+  /** A reference taken out of the message being written again (the person closed what it marks in Studio). */
+  unrefer?: (ref: StudioRef) => void;
   /**
    * A question for the chat, written for the person: `text` in the message being written, `refs` as its references
    * (the examples' "Explain how it's made"). Sent only when the person sends it.
    */
   ask?: (request: { text: string; refs: StudioRef[] }) => void;
   /** The desktop composer's model picker and the options to use for the next canvas writing request. */
-  canvasWriting?: { Picker: React.ComponentType<{ triggerClassName?: string }>; selection: () => HostWritingModel | null };
+  canvasWriting?: {
+    Picker: React.ComponentType<{ triggerClassName?: string; isolated?: boolean; onSelection?: (model: HostWritingModel | null) => void }>;
+    selection: () => HostWritingModel | null;
+  };
   /** Folder imports use the agent and model of the conversation currently shown. */
   libraryImport?: LibraryImportHost & { selection?: () => HostWritingModel | null };
   /**
@@ -76,13 +89,13 @@ export interface StudioHost {
     width: number;
     /** Its preferred width, including while closed (when the shown width is zero). */
     preferredWidth?: number;
-    assets?: { open: boolean; bottom: number };
+    assets?: { open: boolean; bottom: number; beside?: number };
     setOpen: (open: boolean) => void;
     setAssetsOpen?: (open: boolean) => void;
     setWidth?: (width: number, done?: boolean) => void;
     setBounds?: (bounds: { left: number; top: number; width: number; height: number } | null) => void;
     setPlacement?: (placement: { side: 'left' | 'right'; libraryDock: 'left' | 'right' | 'bottom' | 'chat' }) => void;
-    onChange: (listener: (state: { open: boolean; width: number; preferredWidth?: number; assets?: { open: boolean; bottom: number } }) => void) => void | (() => void);
+    onChange: (listener: (state: { open: boolean; width: number; preferredWidth?: number; assets?: { open: boolean; bottom: number; beside?: number } }) => void) => void | (() => void);
   };
   /**
    * The app's chat names a skill in the message being written: the library's skills call this for one tried there,
@@ -103,10 +116,24 @@ export interface StudioHost {
    * has none of these). One not found that has an official installer (`HostAgent.installer`) can be installed:
    * `install` runs it in a terminal window, once the person agreed to that command (an older app has none).
    */
+  /**
+   * The connectors (the desktop app's connectors.mjs): signed in to once, in the browser, and reached by every agent
+   * from then on. `list` says each one's state and the tools its server offers; `onChange` tells of every change.
+   */
+  connectors?: {
+    list: () => Promise<HostConnector[]>;
+    connect: (id: string) => Promise<{ ok: true } | { ok: false; error: string; cancelled?: boolean }>;
+    cancel: (id: string) => Promise<unknown>;
+    disconnect: (id: string) => Promise<unknown>;
+    onChange: (listener: (connectors: HostConnector[]) => void) => () => void;
+  };
   agents?: {
     list: () => Promise<HostAgent[]>;
     /** Explicitly reload local configuration and idle sessions; no model prompt is sent. */
     refresh?: () => Promise<HostAgent[]>;
+    /** Refresh model metadata in the background; a selected model is prepared first. */
+    refreshModels?: (id: HostAgentId, options?: { model?: string; fresh?: boolean }) => Promise<{ ok: boolean }>;
+    saveAgentModels?: (id: HostAgentId, config: { order: string[]; hidden: string[] }) => Promise<{ ok: boolean; error?: string }>;
     connect: (id: HostAgentId) => Promise<{ ok: boolean; error?: string }>;
     /** Stop waiting for terminal sign-in without disconnecting the agent or changing its own sign-in. */
     cancelSignIn?: (id: HostAgentId) => Promise<unknown>;
@@ -121,10 +148,16 @@ export interface StudioHost {
     install?: (id: HostAgentId) => Promise<{ ok: boolean; error?: string }>;
     useAutomatic?: (id: HostAgentId) => Promise<unknown>;
     diagnose?: (id: HostAgentId) => Promise<HostAgentDiagnosis | null>;
+    /** Public vendor metadata only; no installer or model inference is run by a check. */
+    checkUpdates?: (id?: HostAgentId) => Promise<HostAgent[]>;
+    /** Update through the detected installer, or open the owning app's update page. Busy agents queue the update. */
+    update?: (id: HostAgentId) => Promise<{ ok: boolean; external?: boolean; error?: string }>;
     /** Open the installed desktop app to complete its Code component setup. */
     openSetup?: (id: HostAgentId) => Promise<{ ok: boolean; error?: string }>;
     /** The app's part of Settings → Developer's diagnostic report: the app, and each agent's program, version and state, as text. */
     report?: () => Promise<string>;
+    /** Use the desktop process to copy what it knows, even while Studio is disconnected. */
+    copyReport?: (options?: { offline?: boolean }) => Promise<{ ok: boolean }>;
     /**
      * One of the person's own models set up (no `id`) or changed: checked before it is kept. A key left empty keeps its
      * own, or takes the one of another model on the same address.
@@ -174,7 +207,7 @@ export interface StudioHost {
   };
   /**
    * The app's notifications, for Settings → Advanced: the system's notification of a chat's turn done, stopped by an
-   * error, or waiting for an answer, while the window is not in front (on, until switched off).
+   * error, or waiting for an answer, while the window is not in front (off until enabled).
    */
   notifications?: {
     get: () => Promise<boolean>;
@@ -199,7 +232,7 @@ export interface StudioHost {
     /** a project's tab: shown, opened when it is not */
     open: (projectId: string) => void;
     move: (id: string, index: number) => void;
-    report: (state: { title?: string; exporting?: number | null; gone?: boolean }) => void;
+    report: (state: { title?: string; exporting?: number | null; exportStage?: string | null; generating?: boolean; gone?: boolean }) => void;
     /** projects this page deleted: their tabs close together, none of them to be opened again */
     gone?: (projectIds: string[]) => Promise<unknown>;
     /** another tab's title, its project renamed from this page's tabs (its page may be gone, and cannot say it) */
@@ -252,6 +285,15 @@ export type HostAgentId = 'openfilm' | 'codex' | 'claude' | 'antigravity' | 'cop
  */
 export interface HostAgentDiagnosis { found: string | null; program?: string; hint: 'chosen-missing' | 'wsl' | 'unusable' | 'none' | null; text: string }
 
+export interface HostAgentUpdate {
+  status: 'unchecked' | 'checking' | 'current' | 'available' | 'unknown' | 'managed' | 'queued' | 'updating' | 'error';
+  version?: string | null;
+  latestVersion?: string | null;
+  checkedAt?: number;
+  error?: string | null;
+  action?: { kind: 'command' | 'link' | 'desktop'; command?: string; url?: string; managed?: boolean } | null;
+}
+
 /** The API a person's own key is for: OpenAI's Responses or Chat Completions, or Anthropic's Messages. */
 export type HostByokFormat = 'responses' | 'chat' | 'anthropic';
 
@@ -265,7 +307,7 @@ export interface HostAgent {
   id: HostAgentId;
   name: string;
   shown: boolean;
-  status: 'ready' | 'off' | 'sign-in' | 'waiting' | 'missing' | 'key' | 'unavailable' | 'checking';
+  status: 'ready' | 'off' | 'sign-in' | 'waiting' | 'missing' | 'key' | 'unavailable' | 'offline' | 'checking';
   install?: string | null;
   /** What installing it takes, when `install` is not a download: 'code-tab', Claude Code comes with the Claude app (its Code tab). */
   setupRequired?: string | null;
@@ -286,12 +328,29 @@ export interface HostAgent {
   problem?: string;
   /** Older than the chat was tried with (Claude Code): its version, the one tried, the command that updates it, and `app` when its app updates it. */
   outdated?: { version: string; tested: string; update: string | null; app?: boolean } | null;
+  update?: HostAgentUpdate;
   account?: HostAgentAccount;
   /** It signs out with its own command, so the app can switch its account (`agents.switchAccount`); else that is done in the agent itself. */
   signOut?: boolean;
   /** The own key's models, each set up on its own; the first is the one a conversation starts on. */
   byok?: { models: HostOwnModel[] };
   openfilm?: { order: string[]; hidden: string[]; defaultOrder: string[]; model?: string; models: HostZfilmModel[] };
+  catalog?: HostAgentCatalog;
+}
+
+export interface HostAgentOption {
+  id: string; name?: string; category?: string; type?: string; currentValue?: unknown;
+  options?: Array<{ value: unknown; name: string; description?: string; disabled?: boolean }>;
+}
+export interface HostAgentCatalog {
+  models: Array<{ id: string; name: string; shown: boolean }>;
+  defaultOrder: string[];
+  options: HostAgentOption[];
+  byModel: Record<string, HostAgentOption[]>;
+  updatedAt: number;
+  revision?: number;
+  refreshing: boolean;
+  error?: string;
 }
 
 export interface HostZfilmModel { id: string; name: string; shown: boolean; available: boolean; levels?: string[]; effort?: string }
@@ -354,13 +413,15 @@ export interface StudioRefImage { src?: string; viewer?: boolean; crop?: StageBo
  *   · time    a moment of the film
  *   · range   a stretch of the film (marked on the timeline's ruler, or with I and O): the clips playing in it
  *   · track   a whole track
- *   · file    a file of the project (the media pane): its path, kind, and length / size when known
+ *   · file    a file of the project (the media pane): its path, kind, and length / size when known; when a service
+ *             made it (studio/server/media-made.mjs), how (`made`: the words it was asked with, who made it, the model)
  *   · example  an example film (ExamplesGallery), or a part of it (`start`–`end`, a `segment` it names): where it comes
  *             from (`url`), and its folder on this computer to read how it is made (`folder`: fetched by the app
  *             when the message is sent, if not yet); `canvas` when its folder has the canvas it was made on
  *   · node     a node of the project's canvas (components/canvas): its id there, what it is (`nodeKind`: note, file,
  *             group, or what it makes: image, video, sfx, music), its words (a note's `text`, a making node's
- *             `prompt`), its file (`path`: a file, or the version a making node shows) and how many versions it made
+ *             `prompt`), its file (`path`: a file, or the version a making node shows) and how many versions it made;
+ *             a making node's `maker`: the service, model and options it makes with (what the person set on it)
  *   · subtitle a line of the film's subtitles (the subtitle panel), or words picked inside one: their span on the film,
  *             the words, the language they are in when a translation is shown (`lang`), the line's number in the panel
  *             (`index`, from 1), and each word's own span when the transcript has word times (`words`)
@@ -379,8 +440,8 @@ export type StudioRef = (
   | { kind: 'time'; time: number }
   | { kind: 'range'; start: number; end: number; clipIds: string[] }
   | { kind: 'track'; track: number; label: string; clipIds: string[] }
-  | { kind: 'file'; path: string; fileKind: string; duration?: number; w?: number; h?: number }
-  | { kind: 'node'; id: string; nodeKind: string; label: string; text?: string; prompt?: string; path?: string; versions?: number }
+  | { kind: 'file'; path: string; fileKind: string; duration?: number; w?: number; h?: number; made?: { prompt?: string; by?: string; model?: string } }
+  | { kind: 'node'; id: string; nodeKind: string; label: string; text?: string; prompt?: string; path?: string; versions?: number; maker?: { via: string; model?: string; opts?: Record<string, string | number | boolean> } }
   | { kind: 'subtitle'; start: number; end: number; text: string; lang?: string | null; index?: number; words?: Array<{ text: string; start: number; end: number }> }
   | { kind: 'example'; id: string; title: string; url: string; folder?: string; start?: number; end?: number; segment?: string; description?: string; canvas?: boolean }
   | { kind: 'voice'; provider: string; service: string; id: string; name: string; via: string | null; models: string[]; language?: string | null; description?: string | null }
@@ -408,7 +469,7 @@ export interface StudioSelection {
 /**
  * What an app can ask Studio to show: a clip selected (by its film.html id, or its place), a moment, a range briefly lit,
  * a box on the picture shown at its moment, a track, a file of the media pane, a subtitle line (its span marked, the
- * subtitle panel open on it).
+ * subtitle panel open on it), whatever a link names (`open`).
  *
  * And what a chat points at, without moving the playhead or changing the selection: `highlight`, the thing a pill the
  * person hovers stands for, lit until the next one (null: none); `draft-refs`, the things the message being written
@@ -416,6 +477,7 @@ export interface StudioSelection {
  * (empty: sent or cleared).
  */
 export type StudioCommand =
+  | { type: 'show-workbench'; projectId: string; workbench: string }
   | { type: 'select-clip'; id?: string | null; loc?: string | null; seek?: boolean }
   | { type: 'seek'; time: number }
   | { type: 'show-range'; start: number; end: number }
@@ -424,25 +486,43 @@ export type StudioCommand =
   | { type: 'show-file'; path: string }
   /* a node of the canvas: the canvas opened, the node selected and in view */
   | { type: 'show-node'; id: string }
+  /* a link to a thing of the project (lib/links: `film.html#<clip>`, `film.html#t=12.5`, a file): the workbench that
+     shows its file shown, and showing it */
+  | { type: 'open'; link: string }
   | { type: 'show-subtitle'; start: number; end: number }
   | { type: 'highlight'; ref: StudioRef | null }
   | { type: 'draft-refs'; refs: StudioRef[] }
   /* the app's chat sends the person to Settings (an agent to set up) */
   | { type: 'settings'; section?: 'agents' | 'providers' }
-  /* the app's chat shows the library's skills (on Discover, or a skill's page) or the projects window's examples
-     (an example's page); none: the examples */
+  /* the app's chat shows the plugins' window (the installed, Discover, or a skill's page) or the projects window's
+     examples (an example's page); none: the examples */
   | { type: 'show-examples'; open?: CommunityItem };
 
-/**
- * A skill or an example to open on its page (a pill of one clicked); or `discover`, Zfilm's skills to install (an
- * empty project's "More skills"); or `examples`, the examples to start from (its "Start from an example").
- */
-export type CommunityItem = { kind: 'skill'; name: string } | { kind: 'example'; id: string } | { kind: 'discover' } | { kind: 'examples' };
+export interface HostWorkbench {
+  projectId: string;
+  current: string | null;
+  available: readonly string[];
+}
 
-export const studioHost: StudioHost | null = (globalThis as { openfilmHost?: StudioHost }).openfilmHost ?? null;
+/**
+ * A skill or an example to open on its page (a pill of one clicked); `plugins`, the plugins' window (the chat's button);
+ * `discover`, Zfilm's skills to install (an empty project's "More skills"); or `examples`, the examples to start
+ * from (its "Start from an example").
+ */
+export type CommunityItem = { kind: 'skill'; name: string } | { kind: 'example'; id: string } | { kind: 'discover' } | { kind: 'plugins' } | { kind: 'examples' }
+  /* the Community's plugins or skills: what the person has of them, then what there is to add */
+  | { kind: 'community'; tab: 'plugins' | 'skills' };
+
+const hostOfPage = (): StudioHost | null => (globalThis as { openfilmHost?: StudioHost }).openfilmHost ?? null;
+/**
+ * The app Studio is embedded in, read as Studio's modules start and again as its page starts (applyStudioHost): a page
+ * that builds Studio in sets it in a module of its own, which a build split into several files may run after this one.
+ */
+export let studioHost: StudioHost | null = hostOfPage();
 
 /** Make room for the host window's controls, and let Studio's top bars drag the window (see `titlebar`). */
 export function applyStudioHost(root: HTMLElement = document.documentElement) {
+  studioHost = hostOfPage();
   const titlebar = studioHost?.titlebar;
   if (!titlebar) return;
   const set = (inset: unknown) => {
@@ -464,7 +544,9 @@ export type HostPanel = {
   preferredWidth: number;
   setOpen: (open: boolean) => void;
   /** null: the app keeps no assets of its own (Studio's left pane holds them) */
-  assets: { open: boolean; bottom: number; setOpen: (open: boolean) => void } | null;
+  /** `bottom`: how much of the drawer's foot the app's composer covers; `beside`: as much beside its way back to the
+      chat, which covers the middle only */
+  assets: { open: boolean; bottom: number; beside: number; setOpen: (open: boolean) => void } | null;
   setWidth: (width: number, done?: boolean) => void;
   setBounds: (bounds: { left: number; top: number; width: number; height: number } | null) => void;
   setPlacement: (placement: { side: 'left' | 'right'; libraryDock: 'left' | 'right' | 'bottom' | 'chat' }) => void;
@@ -482,7 +564,7 @@ function keepPanelWidth({ open, width }: { open: boolean; width: number }) {
 export function useHostPanel(): HostPanel | null {
   const panel = studioHost?.panel;
   const preferredWidth = React.useRef(panel?.preferredWidth || panel?.width || 420);
-  const read = (next: { open: boolean; width: number; preferredWidth?: number; assets?: { open: boolean; bottom: number } }) => {
+  const read = (next: { open: boolean; width: number; preferredWidth?: number; assets?: { open: boolean; bottom: number; beside?: number } }) => {
     if ((next.preferredWidth ?? next.width) > 0) preferredWidth.current = next.preferredWidth || next.width;
     return {
       open: Boolean(next.open),
@@ -490,6 +572,7 @@ export function useHostPanel(): HostPanel | null {
       preferredWidth: preferredWidth.current,
       assetsOpen: Boolean(next.assets?.open),
       bottom: Math.max(0, Number(next.assets?.bottom) || 0),
+      beside: Math.max(0, Number(next.assets?.beside ?? next.assets?.bottom) || 0),
     };
   };
   const [state, setState] = React.useState(() => (panel ? read(panel) : null));
@@ -514,7 +597,7 @@ export function useHostPanel(): HostPanel | null {
     setWidth: (width, done) => panel.setWidth?.(width, done),
     setBounds: bounds => panel.setBounds?.(bounds),
     setPlacement: placement => panel.setPlacement?.(placement),
-    assets: setAssetsOpen ? { open: state.assetsOpen, bottom: state.bottom, setOpen: (open) => setAssetsOpen(open) } : null,
+    assets: setAssetsOpen ? { open: state.assetsOpen, bottom: state.bottom, beside: state.beside, setOpen: (open) => setAssetsOpen(open) } : null,
   };
 }
 

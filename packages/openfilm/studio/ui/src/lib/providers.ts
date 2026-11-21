@@ -6,6 +6,7 @@
  */
 import React from 'react';
 import { studioHost } from './host.ts';
+import { lookup, useLanguage, type Language } from '../i18n/index.ts';
 
 export type ProviderVerb = 'voice' | 'tts' | 'sfx' | 'music' | 'asr' | 'cutout' | 'image-search' | 'video-search' | 'image' | 'video' | 'translate' | 'web-search' | 'web-fetch';
 
@@ -24,6 +25,10 @@ export interface OwnProvider {
   env: string;
   /** it works without a key: connected with one click, a key added for higher limits (then it has `last4`) */
   keyless?: boolean;
+  /** it takes no key at all (a local service): connected and disconnected with one click, never asked for a key */
+  noKey?: boolean;
+  /** one the person (or their agent) added on this computer, not built in */
+  added?: boolean;
   /** where its key comes from: kept by Studio, the environment, or none (not connected) */
   source: 'file' | 'env' | null;
   /** the environment has a key for it, connected or not: connecting can use that one */
@@ -33,6 +38,8 @@ export interface OwnProvider {
   signIn: boolean;
   /** signed in: the account's email */
   account: string | null;
+  /** signed in to Zfilm: the account's name and picture as its website shows them (studio/server/account-profile.mjs) */
+  profile?: { name: string | null; avatar: string | null };
   /** The saved account credential was rejected by Zfilm; reconnect in either Agents or Services. */
   connectionError?: string;
 }
@@ -114,13 +121,15 @@ export const SERVICE_VERBS: ProviderVerb[] = ['tts', 'music', 'sfx', 'asr', 'cut
 export const PROVIDER_SITES: Readonly<Record<string, string>> = {
   openfilm: 'openfilm.dev', openai: 'openai.com', google: 'ai.google.dev', azure: 'azure.microsoft.com', elevenlabs: 'elevenlabs.io',
   inworld: 'inworld.ai', cartesia: 'cartesia.ai', openrouter: 'openrouter.ai', fal: 'fal.ai', groq: 'groq.com', mimo: 'platform.xiaomimimo.com',
-  doubao: 'volcengine.com', pexels: 'pexels.com', pixabay: 'pixabay.com', brave: 'brave.com/search/api', tavily: 'tavily.com', keenable: 'keenable.ai',
+  doubao: 'volcengine.com', volcengine: 'volcengine.com', pexels: 'pexels.com', pixabay: 'pixabay.com',
+  brave: 'brave.com/search/api', tavily: 'tavily.com', keenable: 'keenable.ai',
 };
 
-async function call<T = ProvidersState>(path: string, init?: { method: string; json?: unknown }): Promise<T> {
+async function call<T = ProvidersState>(path: string, init?: { method?: string; json?: unknown; signal?: AbortSignal }): Promise<T> {
   const res = await fetch(`/api/providers${path}`, {
     method: init?.method ?? 'GET',
     cache: 'no-store',
+    signal: init?.signal,
     headers: init?.json === undefined ? undefined : { 'content-type': 'application/json' },
     body: init?.json === undefined ? undefined : JSON.stringify(init.json),
   });
@@ -154,6 +163,7 @@ function followSignIn() {
 }
 
 function publish(next: ProvidersState) {
+  if (!Array.isArray(next.providers)) throw new Error('Studio did not return the services.');
   const finished = snapshot?.signingIn?.provider && !next.signingIn?.provider;
   snapshot = next;
   followSignIn();
@@ -230,9 +240,18 @@ export interface ProvidersHook {
   removeService: (id: string) => Promise<void>;
 }
 
+/** A provider's name as the language shown says it (Doubao is 豆包 in Chinese), else its own. */
+export function providerName(p: Pick<OwnProvider, 'id' | 'name'>, language?: Language): string {
+  const path = `providerNames.${p.id}`;
+  const said = lookup(path, language);
+  return said === path ? p.name : said;
+}
+
 /** The shared providers, with errors and changes in progress local to the control using them. */
 export function useProviders(): ProvidersHook {
-  const state = React.useSyncExternalStore(subscribe, current, current);
+  const shared = React.useSyncExternalStore(subscribe, current, current);
+  const language = useLanguage();
+  const state = React.useMemo(() => shared && { ...shared, providers: shared.providers.map((p) => ({ ...p, name: providerName(p, language) })) }, [shared, language]);
   const [problem, setProblem] = React.useState<string | null>(null);
   const [problemFor, setProblemFor] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -285,5 +304,52 @@ export function useProviders(): ProvidersHook {
       revision++;
       await readProviders().then(announce, () => {});
     },
+  };
+}
+
+type LocalAccount = {
+  account: Pick<OwnProvider, 'source' | 'env' | 'account' | 'keysUrl' | 'profile' | 'connectionError'>;
+  signingIn: ProvidersState['signingIn'];
+};
+
+let readingAccount: Promise<LocalAccount> | null = null;
+function readLocalAccount() {
+  readingAccount ??= call<LocalAccount>('/openfilm/account', { signal: AbortSignal.timeout(4000) }).then((next) => {
+    if (!next.account || !next.signingIn) throw new Error('Studio did not return the Zfilm account.');
+    return next;
+  }).finally(() => { readingAccount = null; });
+  return readingAccount;
+}
+
+/** The local account can be shown while the shared Services snapshot is still waiting for the cloud. */
+export function useZfilmAccount() {
+  const providers = useProviders();
+  const own = providers.state?.providers.find((p) => p.id === 'openfilm');
+  const loaded = Boolean(own);
+  const [local, setLocal] = React.useState<LocalAccount | null>(null);
+  const [failed, setFailed] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
+  React.useEffect(() => {
+    if (loaded) return;
+    let live = true;
+    let timer: number | undefined;
+    setFailed(false);
+    const load = (retry: boolean) => {
+      void readLocalAccount().then((next) => { if (live) setLocal(next); }, () => {
+        if (!live) return;
+        if (retry) timer = window.setTimeout(() => load(false), 750);
+        else setFailed(true);
+      });
+    };
+    load(true);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [loaded, attempt]);
+
+  return {
+    ...providers,
+    own: own ?? local?.account,
+    signingIn: providers.state?.signingIn ?? local?.signingIn,
+    accountLoadFailed: !loaded && failed,
+    retryAccount: () => { setFailed(false); setAttempt((n) => n + 1); },
   };
 }

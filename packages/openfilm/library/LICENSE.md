@@ -6,8 +6,7 @@ credit anyone.
 - The transitions, effects, text, stickers that move, filters and templates are made by the Zfilm contributors:
   the pages written by hand, the pictures drawn by Zfilm's renderer (`scripts/library-previews.mjs`) over stills
   made for Zfilm.
-- The sounds and music (`audio/`) were made by Zfilm with ElevenLabs' sound effects and music models on a paid plan,
-  which gives Zfilm their rights; a few sounds are made by code (`scripts/library-sounds.mjs`).
+- The sounds and music (`audio/`) are Zfilm's.
 
 These are dedicated to the public domain under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
 

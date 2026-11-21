@@ -59,23 +59,36 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     switchAccount: (id) => ipcRenderer.invoke('desktop:agents:switch-account', { id }),
     usage: (id, fresh) => ipcRenderer.invoke('desktop:agents:usage', { id, fresh: fresh === true }),
     setShown: (id, shown) => ipcRenderer.invoke('desktop:agents:shown', { id, shown: shown === true }),
+    saveZfilmModels: (config) => ipcRenderer.invoke('desktop:agents:openfilm-models', { config }),
+    saveAgentModels: (id, config) => ipcRenderer.invoke('desktop:agents:model-menu', { id, config }),
+    refreshModels: (id, options) => ipcRenderer.invoke('desktop:agents:model-refresh', { id, ...options }),
     locate: (id, words) => ipcRenderer.invoke('desktop:agents:locate', { id, words }),
     useAutomatic: (id) => ipcRenderer.invoke('desktop:agents:automatic', { id }),
     install: (id) => ipcRenderer.invoke('desktop:agents:install', { id }),
     diagnose: (id) => ipcRenderer.invoke('desktop:agents:diagnose', { id }),
+    checkUpdates: (id) => ipcRenderer.invoke('desktop:agents:update-check', { id }),
+    update: (id) => ipcRenderer.invoke('desktop:agents:update', { id }),
     openSetup: (id) => ipcRenderer.invoke('desktop:agents:setup', { id }),
     report: () => ipcRenderer.invoke('desktop:agents:report'),
     /* the whole diagnostic report on the clipboard (main.mjs): the chat's, by a turn that failed */
-    copyReport: () => ipcRenderer.invoke('desktop:diagnostics:copy'),
+    copyReport: (options) => ipcRenderer.invoke('desktop:diagnostics:copy', options),
     saveOwnModel: (config) => ipcRenderer.invoke('desktop:agents:own-model', { config }),
     removeOwnModel: (id) => ipcRenderer.invoke('desktop:agents:own-model-remove', { id }),
-    /* the MCP servers the person added to it themselves, each let into OpenFilm or not (skills-ipc.mjs) */
+    /* the MCP servers the person added to it themselves, each let into Zfilm or not (skills-ipc.mjs) */
     mcp: (id) => ipcRenderer.invoke('desktop:agents:mcp', { id }),
-    /* the skills the person installed in it themselves, each let into OpenFilm or not */
+    /* the skills the person installed in it themselves, each let into Zfilm or not */
     skills: (id) => ipcRenderer.invoke('desktop:agents:skills', { id }),
     allowSkill: (id, name, allowed) => ipcRenderer.invoke('desktop:skills:allow', { agent: id, name, allowed: allowed === true }),
     allowMcp: (id, name, allowed) => ipcRenderer.invoke('desktop:agents:mcp-allow', { id, name, allowed: allowed === true }),
     onChange: on('desktop:agents'),
+  },
+  /* the connectors: signed in here once for every agent (connectors.mjs) */
+  connectors: {
+    list: () => ipcRenderer.invoke('desktop:connectors:list'),
+    connect: (id) => ipcRenderer.invoke('desktop:connectors:connect', { id }),
+    cancel: (id) => ipcRenderer.invoke('desktop:connectors:cancel', { id }),
+    disconnect: (id) => ipcRenderer.invoke('desktop:connectors:disconnect', { id }),
+    onChange: on('desktop:connectors'),
   },
   /* the agents' turns (local-agents-ipc.mjs) */
   localAgents: {
@@ -89,7 +102,7 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     ack: (key, turnId) => invoke('desktop:local-agents:ack')({ key, turnId }),
     steer: (key, text, images) => invoke('desktop:local-agents:steer')({ key, text, images }),
     adopt: (key, turnId, meta) => invoke('desktop:local-agents:adopt')({ key, turnId, meta }),
-    cancel: (key) => invoke('desktop:local-agents:cancel')({ key }),
+    cancel: (key, turnId) => invoke('desktop:local-agents:cancel')({ key, turnId }),
     setOption: (key, configId, value) => invoke('desktop:local-agents:set-option')({ key, configId, value }),
     answerPermission: (key, requestId, optionId) => invoke('desktop:local-agents:permission')({ key, requestId, optionId }),
     answerQuestion: (key, requestId, answers) => invoke('desktop:local-agents:answer')({ key, requestId, answers }),
@@ -108,7 +121,7 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     saveAttachment: (project, name, bytes) => ipcRenderer.invoke('desktop:chat:attachment', { project, name, bytes }),
     describePaths: (paths) => ipcRenderer.invoke('desktop:chat:paths', { paths }),
     unsaved: (project, except) => ipcRenderer.invoke('desktop:chat:unsaved', { project, except }),
-    snapshot: (project, turnId) => ipcRenderer.invoke('desktop:chat:snapshot', { project, turnId }),
+    snapshot: (project, turnId, recover) => ipcRenderer.invoke('desktop:chat:snapshot', { project, turnId, recover }),
     changes: (project, turnId) => ipcRenderer.invoke('desktop:chat:changes', { project, turnId }),
     undo: (project, turnId) => ipcRenderer.invoke('desktop:chat:undo', { project, turnId }),
   },
@@ -117,7 +130,7 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     list: (project, agent) => ipcRenderer.invoke('desktop:skills:list', { project, agent }),
     texts: (project, agent, names) => ipcRenderer.invoke('desktop:skills:texts', { project, agent, names }),
     allow: (agent, name, allowed) => ipcRenderer.invoke('desktop:skills:allow', { agent, name, allowed }),
-    /* one of OpenFilm's skills turned on or off: the agents' sessions take it up */
+    /* one of Zfilm's skills turned on or off: the agents' sessions take it up */
     changed: () => ipcRenderer.invoke('desktop:skills:changed'),
     preview: (url) => ipcRenderer.invoke('desktop:skills:preview', { url }),
     /* a folder dropped (its path), or null: one picked in the system's dialog, with the page's words { title, button } */
@@ -143,6 +156,9 @@ contextBridge.exposeInMainWorld('openfilmNative', {
   onToggleChat: on('desktop:toggle-chat'),
   /* Native Settings menu and Cmd/Ctrl+,; no renderer can invoke a privileged action here. */
   onOpenSettings: on('desktop:open-settings'),
+  /* an openfilm:// link (deep-links.mjs): the one that opened the app, taken once; those that come while it runs */
+  takeLink: () => ipcRenderer.invoke('desktop:take-link'),
+  onOpenLink: on('desktop:open-link'),
   onStudioBrowser: on('desktop:studio-browser'),
   onFfmpeg: on('desktop:ffmpeg'),
   onUpdate: on('desktop:update'),

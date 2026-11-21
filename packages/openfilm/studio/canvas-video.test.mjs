@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { filmHtml } from '../src/film-doc.mjs';
 import { openProject } from './server/projects.mjs';
 import { startStudio } from './server/server.mjs';
+import { showWorkbench } from './show-workbench.mjs';
 
 test('a canvas video uploads in place and keeps its frame while playing, renaming, and dragging', {
   timeout: 60_000, skip: spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status !== 0,
@@ -37,13 +38,14 @@ test('a canvas video uploads in place and keeps its frame while playing, renamin
     await page.route('**/files?path=*clip.webm', async (route) => { await hold; await route.continue(); });
     const openCanvas = async () => {
       await page.goto(url);
-      await page.locator('[data-work-mode="edit"]').click();
+      await page.locator('[data-work-mode="edit"]').waitFor();
+      await showWorkbench(page, 'canvas');
       await page.locator('[data-studio-canvas][data-canvas-ready="1"]').waitFor();
     };
     await openCanvas();
     await page.locator('.react-flow__pane').dblclick({ position: { x: 600, y: 360 } });
     const chooser = page.waitForEvent('filechooser');
-    await page.getByRole('button', { name: 'Upload', exact: true }).click();
+    await page.locator('[data-canvas-add-menu]').getByRole('button', { name: 'Upload', exact: true }).click();
     await (await chooser).setFiles(input);
     const pending = page.locator('.react-flow__node').filter({ hasText: 'Uploading…' });
     await pending.waitFor();
@@ -62,7 +64,8 @@ test('a canvas video uploads in place and keeps its frame while playing, renamin
       return [...context.getImageData(10, 10, 1, 1).data];
     }, png.toString('base64'));
     const checkFirstFrame = async () => {
-      const deadline = Date.now() + 1000;
+      /* the video is ready before its picture reaches the screen: on a slow machine (Windows CI) that takes seconds */
+      const deadline = Date.now() + 5000;
       let pixel;
       do {
         pixel = await sample(await node.screenshot());
@@ -214,7 +217,7 @@ test('a canvas video uploads in place and keeps its frame while playing, renamin
     near(origin, cardEdge);
     near(tip, drop);
     assert.deepEqual(await stroke(menuWire), activeStroke);
-    await page.getByRole('button', { name: 'Text', exact: true }).click();
+    await page.locator('[data-canvas-add-menu]').getByRole('button', { name: 'Text', exact: true }).click();
     await menuWire.waitFor({ state: 'detached' });
     const made = page.locator('.react-flow__node-note').first();
     await made.waitFor();
@@ -241,7 +244,7 @@ test('a canvas video uploads in place and keeps its frame while playing, renamin
     await page.mouse.up();
     await menuWire.waitFor({ state: 'attached' });
     near((await endpoints(menuWire))[1], leftDrop);
-    await page.getByRole('button', { name: 'Text', exact: true }).click();
+    await page.locator('[data-canvas-add-menu]').getByRole('button', { name: 'Text', exact: true }).click();
     const reference = page.locator('.react-flow__node-note').nth(1);
     await reference.waitFor();
     const referenceBox = await reference.boundingBox();
@@ -305,7 +308,7 @@ test('a canvas video uploads in place and keeps its frame while playing, renamin
     await writeFile(canvasFile, JSON.stringify(doc));
     await page.reload();
     await page.locator('[data-work-mode]').first().waitFor();
-    if (await page.locator('[data-work-mode="edit"]').count()) await page.locator('[data-work-mode="edit"]').click();
+    await showWorkbench(page, 'canvas');
     await page.locator('[data-studio-canvas][data-canvas-ready="1"]').waitFor();
     await node.getByText('Final shot', { exact: true }).waitFor();
     const legacyBox = await node.boundingBox();
@@ -340,12 +343,63 @@ test('a canvas video uploads in place and keeps its frame while playing, renamin
     await highlighted.waitFor();
     await highlighted.waitFor({ state: 'hidden' });
     assert.equal(await page.locator('[data-work-mode="canvas"]').count(), 1);
-    await library.getByRole('button', { name: 'Favorites', exact: true }).click();
+    await library.getByRole('button', { name: 'Mine', exact: true }).click();
     await library.getByRole('button', { name: 'Effects', exact: true }).click();
     await reveal.click();
     await highlighted.waitFor();
     assert.equal(await library.getByRole('button', { name: 'Media', exact: true }).getAttribute('aria-pressed'), 'true');
     assert.equal(await page.locator('[data-work-mode="canvas"]').count(), 1);
+
+    // Simulate a decoder refusing the original even though the codec check considers WebM playable.
+    await page.route('**/assets/clip.webm?of-original=1&v=*', (route) => route.fulfill({ status: 415 }));
+    const requestsCopy = page.waitForRequest((request) => request.method() === 'POST'
+      && new URL(request.url()).pathname.endsWith('/playback') && new URL(request.url()).searchParams.get('path') === 'assets/clip.webm');
+    await page.reload();
+    await page.locator('[data-work-mode]').first().waitFor();
+    await showWorkbench(page, 'canvas');
+    await requestsCopy;
+    await page.waitForFunction((nodeId) => {
+      const compatible = document.querySelector(`[data-id="${nodeId}"] video`);
+      return compatible?.currentSrc.includes('/playback?') && compatible.readyState >= 2;
+    }, id);
+    assert.equal(await node.getByText('Video could not be played', { exact: true }).count(), 0);
+    await showWorkbench(page, 'edit');
+    const libraryToggle = page.locator('[data-viewer-library]');
+    if (await libraryToggle.getAttribute('aria-pressed') === 'false') await libraryToggle.click();
+    await asset.dblclick();
+    await page.waitForFunction(() => {
+      const source = document.querySelector('video[data-asset-preview-control]');
+      return source?.currentSrc.includes('/playback?') && source.readyState >= 2;
+    });
+
+    // A clip in a scene folder also recovers in the editing preview, outside the project's asset listing.
+    await mkdir(join(root, 'scene'));
+    await copyFile(input, join(root, 'scene', 'late.webm'));
+    await page.route('**/scene/late.webm', async (route) => {
+      const response = await route.fetch();
+      if (response.headers()['content-type'] === 'video/webm') await route.fulfill({ status: 415 });
+      else await route.fulfill({ response });
+    });
+    const timelineRequestsCopy = page.waitForRequest((request) => request.method() === 'POST'
+      && request.url().endsWith('/proxies') && request.postDataJSON().undecoded.includes('scene/late.webm'));
+    await writeFile(join(root, 'film.html'), filmHtml({
+      stage: { w: 1280, h: 720 }, tracks: [{ clips: [{ id: 'late', src: 'scene/late.webm', time: [0, 4] }] }],
+    }));
+    await page.reload();
+    await page.locator('[data-work-mode]').first().waitFor();
+    await showWorkbench(page, 'edit');
+    await timelineRequestsCopy;
+    const timelineVideo = page.frameLocator('iframe[title="film"]:not([data-loading]):not([data-leaving])').locator('video[src*="late.webm"]').first();
+    await timelineVideo.waitFor({ state: 'attached' }).catch(async (error) => {
+      const diagnostics = await Promise.all(page.frames().filter((f) => f.url().includes('/film.html')).map((f) => f.evaluate(() => ({
+        url: location.href, videos: [...document.querySelectorAll('video')].map((v) => [v.outerHTML.slice(0, 300), v.readyState, v.error?.message]),
+      }))));
+      throw new Error(`Timeline video did not mount: ${JSON.stringify(diagnostics)}`, { cause: error });
+    });
+    assert.ok(await timelineVideo.evaluate((v) => v.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || new Promise((done) => {
+      v.addEventListener('loadeddata', () => done(true), { once: true });
+      window.setTimeout(() => done(false), 5000);
+    })));
     assert.deepEqual(errors, []);
   } finally {
     releaseUpload?.();

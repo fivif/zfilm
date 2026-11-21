@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { filmHtml, readFilmFile } from '../../../../src/film-doc.mjs';
 import { applyOps } from '../../../server/ops.mjs';
 import type { Op } from '../api.ts';
+import { filmShape } from './film-shape.ts';
 import {
   editModelOf,
   freshLink,
@@ -14,6 +16,7 @@ import {
   planCloseGap,
   planCloseMainGaps,
   planCloseTrackGaps,
+  planFillGaps,
   planCutRange,
   planDetachAudio,
   planEdges,
@@ -34,7 +37,7 @@ import {
   type EditPlan,
   type EditTrack,
 } from './timeline-edit.ts';
-import type { TimelineTrack } from './timeline-layout';
+import { layoutTracks, type TimelineTrack } from './timeline-layout.ts';
 
 /*
  * Every plan is checked the way it will be written: its operations applied to film.html's value by the server's own
@@ -169,6 +172,21 @@ test('all the gaps on a track closed at once, on that track', () => {
   const out = after(m, planCloseTrackGaps(m, 0));
   assert.deepEqual(out, [[['t1', 0, 1], ['t2', 1, 2]], [['a', 0, 3], ['b', 3, 6]], [['vo', 4.5, 5]]]);
   assert.deepEqual(planCloseTrackGaps(m, 1).ops, [], 'no gap on the picture track');
+});
+
+test('the gaps after picked clips filled: each runs on to the next one\'s start, nothing moves', () => {
+  const m = model(
+    [['c1', 0, 1, { still: true }], ['c2', 1.5, 2, { still: true }], ['c3', 2, 3, { still: true }], ['c4', 5, 6, { still: true }], ['c5', 8, 9, { still: true }]],
+    [['a', 0, 2], ['b', 4, 6]],
+    { locked: true, clips: [['l1', 0, 1], ['l2', 3, 4]] },
+  );
+  const out = after(m, planFillGaps(m, ['c1', 'c2', 'c3', 'c4', 'a', 'l1']));
+  assert.deepEqual(out[0], [['c1', 0, 1.5], ['c2', 1.5, 2], ['c3', 2, 5], ['c4', 5, 8], ['c5', 8, 9]], 'touching stays, the last picked runs to the next one');
+  assert.deepEqual(out[1], [['a', 0, 4], ['b', 4, 6]], 'footage runs on while its file has more');
+  assert.deepEqual(out[2], [['l1', 0, 1], ['l2', 3, 4]], 'a locked track stays');
+  const short = model([['v', 0, 2, { sourceMs: 3000 }], ['w', 5, 6]]);
+  assert.deepEqual(after(short, planFillGaps(short, ['v']))[0], [['v', 0, 3], ['w', 5, 6]], 'footage goes as far as its file');
+  assert.deepEqual(planFillGaps(m, ['c5']).ops, [], 'the last on its track has no gap after it');
 });
 
 test('how much source a clip can still show at each edge', () => {
@@ -366,6 +384,26 @@ test('a trim stops at the end of its source and at the shortest clip', () => {
   const later = model([['v', 3, 7, { inMs: 1000, sourceMs: 6000 }]]);
   assert.equal(planEdges(later, [{ id: 'v', kind: 'start' }], -5000).deltaMs, -1000, 'the head goes back to the source start');
   assert.equal(planEdges(m, [{ id: 'v', kind: 'end' }], -9000).deltaMs, -3900);
+});
+
+test('trimming a split still keeps its written source offset and updates its length', () => {
+  const film = {
+    stage: { w: 1920, h: 1080 },
+    tracks: [{ clips: [{ id: 'overlay', src: 'assets/overlay.png', at: 200, time: [70.511, 158.511] as [number, number] }] }],
+  };
+  const rows = layoutTracks(filmShape(film, []));
+  const editModel = editModelOf(rows);
+  const plans = [
+    { plan: planEdges(editModel, [{ id: 'overlay', kind: 'end' }], -17_495), at: 200, end: 141.016 },
+    { plan: planEdges(editModel, [{ id: 'overlay', kind: 'start' }], 19_201), at: 219.201, end: 139.31 },
+    { plan: planRippleTrim(editModel, ['overlay'], 'start', 19_201), at: 200, end: 139.31 },
+  ];
+  for (const { plan, at, end } of plans) {
+    const saved = readFilmFile(filmHtml(applyOps(structuredClone(film), plan.ops as never)));
+    assert.deepEqual(saved.problems, []);
+    assert.equal(saved.doc?.tracks[0]?.clips[0]?.at, at);
+    assert.deepEqual(saved.doc?.tracks[0]?.clips[0]?.time, [70.511, end]);
+  }
 });
 
 test('a slip changes what a clip shows, not where or how long, inside its source', () => {
@@ -575,6 +613,30 @@ test('with the magnet a delete on the main track closes up; with linkage the pic
     [['bed', 0, 12]],
     [['sfx', 5, 6]],
   ]);
+});
+
+test('a caption track below footage never becomes the magnetic main track, locked or unlocked', () => {
+  const m = model(
+    { role: 'video', clips: [['shot', 1, 5]] },
+    { role: 'mg', clips: [['cue', 1, 2, { cue: true, still: true }]] },
+  ).map((t, i) => i === 1 ? { ...t, captions: true } : t);
+  assert.equal(mainTrackOf(m), 0);
+  assert.equal(mainTrackOf([{ ...m[1]!, index: 0 }]), null, 'a captions-only film has no magnetic main track');
+  assert.deepEqual(after(m, planMove(m, { ids: ['cue'], deltaMs: 2000, pointerMs: 3500, mode: 'place', ...ON })!), [[['shot', 1, 5]], [['cue', 3, 4]]]);
+  assert.equal(mainTrackOf([m[0]!, { ...m[1]!, locked: true }]), 0);
+});
+
+test('a mixed selection of captions and media keeps one horizontal offset with the main-track magnet on', () => {
+  const m = model(
+    { role: 'mg', clips: [['cue', 1, 2, { cue: true, still: true }]] },
+    { role: 'video', clips: [['a', 1, 5], ['b', 5, 8]] },
+    { role: 'audio', clips: [['voice', 1, 4]] },
+  ).map((t, i) => i === 0 ? { ...t, captions: true } : t);
+  for (const ids of [['a', 'b', 'cue', 'voice'], ['cue', 'a', 'b', 'voice']]) {
+    const plan = planMove(m, { ids, deltaMs: 2000, pointerMs: 3500, mode: 'place', ...ON });
+    assert.ok(plan);
+    assert.deepEqual(after(m, plan), [[['cue', 3, 4]], [['a', 3, 7], ['b', 7, 10]], [['voice', 3, 6]]]);
+  }
 });
 
 test('a caption track\'s cues are clips: they ride on the main track, go with their shot, never leave caption tracks', () => {

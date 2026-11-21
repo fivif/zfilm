@@ -75,15 +75,17 @@ test('Zfilm\'s keys are the keys Studio had', () => {
   assert.equal(mac('ArrowLeft', { altKey: true }), 'nudge-back');
   assert.equal(mac('ArrowRight', { altKey: true }), 'nudge-forward');
   assert.equal(mac('ArrowDown', { altKey: true }), 'overwrite-track-down');
+  assert.equal(mac('ArrowUp', { altKey: true }), 'overwrite-track-up');
   assert.equal(mac('Z', { shiftKey: true }), 'zoom-fit');
   assert.equal(mac('n'), 'toggle-snap');
   assert.equal(mac('N', { shiftKey: true }), 'toggle-magnet');
   assert.equal(mac('p'), 'toggle-magnet');
-  assert.equal(mac('`'), 'toggle-linkage');
+  assert.equal(mac('`'), 'preview-fullscreen');
   assert.equal(mac('~', { shiftKey: true }), 'toggle-linkage');
-  assert.equal(actionOf({ ...press('`'), code: 'Backquote' }, OPENFILM_MAC, true), 'toggle-linkage');
-  assert.equal(mac('s'), null);
-  assert.equal(win('s'), null);
+  assert.equal(actionOf({ ...press('`'), code: 'Backquote' }, OPENFILM_MAC, true), 'preview-fullscreen');
+  assert.equal(actionOf(press('Dead', { code: 'Backquote' }), OPENFILM_MAC, true), 'preview-fullscreen', 'the physical key works on dead-key layouts');
+  assert.equal(mac('s'), 'toggle-skimming');
+  assert.equal(win('s'), 'toggle-skimming');
   assert.equal(mac('S', { shiftKey: true, ctrlKey: true }), 'detach-audio');
   assert.equal(win('S', { shiftKey: true, ctrlKey: true }), 'detach-audio');
   assert.equal(mac('q'), 'ripple-start');
@@ -118,8 +120,14 @@ test('M adds a marker, ⇧M and ⌥M go to the next and the one before (⌥M typ
   assert.equal(mac('M', { shiftKey: true }), 'next-marker');
   assert.equal(actionOf({ ...press('µ', { altKey: true }), code: 'KeyM' }, OPENFILM_MAC, true), 'prev-marker');
   assert.equal(win('m', { altKey: true }), 'prev-marker');
-  assert.equal(mac('m', { metaKey: true }), null);
   assert.equal(mac('m', { altKey: true, shiftKey: true }), 'prev-marker', '⌥⇧M too');
+});
+
+test('Command+M and Ctrl+M open export in each built-in scheme', () => {
+  for (const scheme of BUILT_IN_SCHEMES) {
+    assert.equal(actionOf(press('m', { metaKey: true }), schemeKeymap(scheme, true), true), 'export');
+    assert.equal(actionOf(press('m', { ctrlKey: true }), schemeKeymap(scheme, false), false), 'export');
+  }
 });
 
 test('keys that are not the editor\'s stay the browser\'s, and Ctrl is the modifier off a Mac', () => {
@@ -160,7 +168,7 @@ test('hints and key caps follow the platform', () => {
   assert.equal(hintOf(OPENFILM_WIN, 'split', false), 'Ctrl+B');
   assert.equal(hintOf(OPENFILM_MAC, 'redo', true), '⌘⇧Z');
   assert.equal(hintOf(OPENFILM_WIN, 'redo', false), 'Ctrl+Shift+Z');
-  assert.equal(hintOf(OPENFILM_MAC, 'zoom-in', true), '⌘+');
+  assert.equal(hintOf(OPENFILM_MAC, 'zoom-in', true), '+');
   assert.deepEqual(comboCaps('ctrl+shift+s', true), ['⌃', '⇧', 'S']);
   assert.deepEqual(comboCaps('ctrl+shift+s', false), ['Ctrl', 'Shift', 'S']);
   assert.deepEqual(comboCaps('Backspace', true), ['⌫']);
@@ -176,6 +184,8 @@ test('the built-in schemes: each app\'s keys where Studio has the action, Zfilm\
     for (const a of ACTION_IDS) for (const combo of keymap[a]) assert.ok(isCombo(combo), `${id}: ${a}: ${combo}`);
   }
   const premiere = schemeKeymap('premiere', true);
+  assert.equal(actionOf(press('s'), premiere, true), 'toggle-snap');
+  assert.equal(actionOf(press('S', { shiftKey: true }), premiere, true), 'toggle-skimming', 'skimming leaves Premiere snapping on S');
   assert.deepEqual(premiere.split, ['mod+k'], 'Add Edit');
   assert.deepEqual(premiere['split-all'], ['mod+shift+k']);
   assert.deepEqual(premiere['split-mode'], ['c'], 'the Razor tool');
@@ -187,8 +197,15 @@ test('the built-in schemes: each app\'s keys where Studio has the action, Zfilm\
   assert.deepEqual(schemeKeymap('premiere', false)['clear-range'], ['mod+shift+x']);
   assert.equal(actionOf(press('k', { metaKey: true }), premiere, true), 'split');
   assert.equal(actionOf(press('\\'), premiere, true), 'zoom-fit');
+  assert.equal(actionOf(press('='), premiere, true), 'zoom-in', 'Zoom In');
+  assert.equal(actionOf({ ...press('+', { shiftKey: true }), code: 'Equal' }, premiere, true), 'zoom-in', '+ is the = key with ⇧');
+  assert.equal(actionOf({ ...press('+'), code: 'NumpadAdd' }, premiere, true), 'zoom-in', 'the keypad\'s +');
+  assert.equal(actionOf(press('-'), premiere, true), 'zoom-out');
 
   const fcp = schemeKeymap('fcp', true);
+  assert.equal(actionOf({ ...press('+', { shiftKey: true }), code: 'Equal' }, fcp, true), 'zoom-in', 'plain + zooms there too');
+  assert.equal(actionOf(press('-'), fcp, true), 'zoom-out');
+  assert.equal(actionOf(press('=', { metaKey: true }), fcp, true), 'zoom-in');
   assert.deepEqual(fcp.loop, ['mod+l']);
   assert.deepEqual(fcp.refer, [], '⌘L loops there');
   assert.deepEqual(fcp['ripple-delete'], ['Backspace', 'Delete'], 'Delete closes the gap');
@@ -267,4 +284,11 @@ test('what is kept: the scheme and the custom ones, checked when read', () => {
   assert.deepEqual(Object.keys(odd.custom), ['custom1']);
   assert.deepEqual(keymapOf(odd, true).split, ['mod+e']);
   assert.deepEqual(keymapOf(odd, true)['split-all'], ['mod+shift+b', 'mod+k'], 'the rest from its base');
+});
+
+test('legacy custom linkage defaults free backquote for full screen without overwriting deliberate bindings', () => {
+ const map=customKeymap({base:'openfilm',keys:{'toggle-linkage':['`','shift+`']}},true);
+ assert.equal(actionOf(press('`',{code:'Backquote'}),map,true),'preview-fullscreen');
+ assert.equal(actionOf(press('~',{code:'Backquote',shiftKey:true}),map,true),'toggle-linkage');
+ assert.equal(actionOf(press('`'),customKeymap({base:'openfilm',keys:{'toggle-linkage':['`']}},true),true),'toggle-linkage');
 });

@@ -31,13 +31,14 @@ import { createWriteStream, existsSync, readFileSync, readdirSync, realpathSync,
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
-import http from 'node:http';
-import https from 'node:https';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
-import { communityCatalog, communityReady, fetchCommunity, isCommunity, refreshCommunity } from './community-library.mjs';
+import { communityCatalog, communityReady, fetchCommunity, isCommunity, refreshCommunity, streamCommunity } from './community-library.mjs';
 import { setSharedPref, sharedHome, sharedPref } from '../../src/locations.mjs';
-import { proxyAgent } from './library-proxy.mjs';
+import { SKILL_UID } from '../../src/skills.mjs';
+import { ownVoiceKeys } from './voice-store.mjs';
+import { DOUBAO_PAIRS } from './providers/doubao-dialogue.mjs';
+import { doubaoSampleUrl } from './providers/doubao-samples.mjs';
 
 export { refreshCommunity };
 
@@ -97,81 +98,50 @@ const fetching = new Map();
 /** @type {Map<string, Promise<void>>} A bundle and its card's poster can ask for the same file concurrently. */
 const filesFetching = new Map();
 
+/** Why the last file of the library did not arrive: what Settings → Library shows. @type {string | null} */
+let lastError = null;
+/** @returns {string | null} */
+export const lastLibraryError = () => lastError;
+
 /** @param {string} rel */
 function fetchFile(rel) {
   const pending = filesFetching.get(rel);
   if (pending) return pending;
   if (located(rel)) return Promise.resolve();
-  const job = downloadFile(rel).finally(() => filesFetching.delete(rel));
+  const job = downloadFile(rel)
+    .catch((/** @type {unknown} */ e) => { lastError = e instanceof Error ? e.message : String(e); throw e; })
+    .finally(() => filesFetching.delete(rel));
   filesFetching.set(rel, job);
   return job;
 }
 
-/** Why the last fetch failed, for Settings to show (null once one works). */
-/** @type {string | null} */ let lastError = null;
-export const lastLibraryError = () => lastError;
-
-/** The body of a response, as text (files.json, which is small). */
-async function textOf(/** @type {any} */ stream) {
-  const chunks = [];
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks).toString('utf8');
-}
-
-/**
- * One request for the library: through the saved proxy when there is one, else as Node's fetch does. Through a proxy
- * the redirect is followed here (the file host answers 302), so callers see the last response either way.
- * @param {string} url @param {number} timeoutMs
- * @returns {Promise<{ ok: boolean, status: number, url: string, stream: any, json: () => Promise<any> }>}
- */
-async function open(url, timeoutMs) {
-  const agent = await proxyAgent();
-  if (!agent) {
-    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-    return { ok: res.ok, status: res.status, url: res.url, stream: () => Readable.fromWeb(/** @type {any} */ (res.body)), json: () => res.json() };
-  }
-  /** @type {(at: string, hops: number) => Promise<any>} */
-  const go = (at, hops) => new Promise((resolve, reject) => {
-    const lib = at.startsWith('https:') ? https : http;
-    const req = lib.get(at, { agent }, (res) => {
-      const status = res.statusCode ?? 0;
-      const location = res.headers.location;
-      if (status >= 300 && status < 400 && location && hops > 0) {
-        res.resume();
-        resolve(go(new URL(location, at).toString(), hops - 1));
-        return;
-      }
-      resolve({ ok: status >= 200 && status < 300, status, url: at, stream: () => res, json: async () => JSON.parse(await textOf(res)) });
-    });
-    req.setTimeout(Math.min(timeoutMs, 20_000), () => req.destroy(new Error('the proxy did not answer in time')));
-    req.on('error', reject);
-  });
-  return go(url, 3);
-}
-
-/**
- * Where the files themselves come from: the library's host sends each request on to its own file server, and asking
-
-
-
-/** Where the files come from: the library's host until the first answer says its file server, which saves the redirect. */
-let assetRoot = '';
-const filesRoot = () => assetRoot || libraryHost();
-
 /** One file of the published library into the cache: whole or not at all. */
 async function downloadFile(/** @type {string} */ rel) {
+  /* Doubao's official previews use the same local player/cache as the published library. Keep their verified
+     public source in the catalog so a new release works before its previews have been mirrored to our host. */
+  const source = officialVoiceSample(rel);
   /* a model is a hundred megabytes: time for a slow line */
-  const res = await open(`${filesRoot()}/${rel.split('/').map(encodeURIComponent).join('/')}`, rel.startsWith('models/') ? 30 * 60_000 : 60_000);
+  const res = await fetch(source ?? `${libraryHost()}/${rel.split('/').map(encodeURIComponent).join('/')}`, {
+    signal: AbortSignal.timeout(rel.startsWith('models/') ? 30 * 60_000 : 60_000), ...(source ? { redirect: 'error' } : {}),
+  });
   if (!res.ok) throw new Error(`the library's ${rel} came back ${res.status}`);
-  if (res.url && res.url !== filesRoot()) {
-    try { assetRoot = new URL(res.url).origin + libraryHost().replace(/^https?:\/\/[^/]+/, ''); } catch { /* keep the one we have */ }
-  }
+  if (source && (!/^audio\//i.test(res.headers.get('content-type') ?? '') || Number(res.headers.get('content-length') ?? 0) > (20 << 20))) throw new Error('The voice service returned no playable sample.');
   const at = inside(libraryCache(), rel);
   await mkdir(dirname(at), { recursive: true });
   const part = `${at}.part-${process.pid}`;
   /* written as it comes: how far a model is can be read off its size (local-models.mjs) */
   try {
-    await pipeline(/** @type {any} */ (res.stream()), createWriteStream(part));
+    const stream = Readable.fromWeb(/** @type {import('node:stream/web').ReadableStream} */ (res.body));
+    if (source) {
+      let size = 0;
+      await pipeline(stream, async function* (chunks) {
+        for await (const chunk of chunks) {
+          size += chunk.length;
+          if (size > (20 << 20)) throw new Error('The voice sample exceeded 20 MB.');
+          yield chunk;
+        }
+      }, createWriteStream(part));
+    } else await pipeline(stream, createWriteStream(part));
   } catch (e) {
     await rm(part, { force: true });
     throw e;
@@ -195,7 +165,7 @@ export function fetchLibrary(/** @type {unknown} */ rel) {
       /* a file has a name with a dot; a bundle is a folder, its files listed beside it */
       if (/\.[a-z0-9]+$/i.test(rel)) await fetchFile(rel);
       else {
-        const res = await open(`${libraryHost()}/${rel.split('/').map(encodeURIComponent).join('/')}/files.json`, 30_000);
+        const res = await fetch(`${libraryHost()}/${rel.split('/').map(encodeURIComponent).join('/')}/files.json`, { signal: AbortSignal.timeout(30_000) });
         if (!res.ok) return null;
         const files = /** @type {unknown} */ (await res.json());
         if (!Array.isArray(files)) return null;
@@ -205,10 +175,8 @@ export function fetchLibrary(/** @type {unknown} */ rel) {
         for (const file of files) if (typeof file === 'string') await fetchFile(`${rel}/${file}`);
         await rm(join(folder, '.partial'), { force: true });
       }
-      lastError = null;
       return located(rel);
-    } catch (e) {
-      lastError = e instanceof Error ? e.message : String(e);
+    } catch {
       return null;
     } finally {
       fetching.delete(rel);
@@ -301,12 +269,71 @@ export function libraryIndex() {
     }
     items.push(...(catalog.items ?? []));
   }
-  merged = { parts, index: { ...own, groups, items } };
+  merged = { parts, index: { ...own, groups, items, packs: packsOf(groups, items) } };
   return merged.index;
+}
+
+/**
+ * The library's packs: Zfilm's own are its groups (`openfilm/<category>/<group>`, always there); the community's
+ * come from its catalog (`<maker>/<name>`, each a group of every category it has things in), there once the person
+ * adds them (libraryAdded).
+ * @param {Record<string, unknown[]>} groups @param {unknown[]} items
+ */
+function packsOf(groups, items) {
+  const community = communityCatalog().packs;
+  const theirs = new Set(community.map((p) => p.id));
+  /** @type {Map<string, number>} */
+  const count = new Map();
+  for (const item of /** @type {{ cat: string, group: string }[]} */ (items)) count.set(`${item.cat}\0${item.group}`, (count.get(`${item.cat}\0${item.group}`) ?? 0) + 1);
+  const own = Object.entries(groups).flatMap(([cat, list]) => (/** @type {{ id: string, name: Record<string, string> }[]} */ (list))
+    .filter((g) => !theirs.has(g.id) && count.get(`${cat}\0${g.id}`))
+    .map((g) => ({ id: `openfilm/${cat}/${g.id}`, name: g.name, cats: [cat], group: g.id, count: count.get(`${cat}\0${g.id}`), official: true })));
+  const byId = new Map(/** @type {{ id: string, cat: string }[]} */ (items).map((it) => [it.id, it.cat]));
+  return [...own, ...community.map((p) => ({ ...p, group: p.id, cats: [...new Set(p.items.map((id) => byId.get(id)).filter(Boolean))], count: p.items.length }))];
+}
+
+/** Where the community's packs and things the person added are kept in the shared prefs.json: their ids. */
+const ADDED = 'libraryAdded';
+
+/** The community's packs and things the person added (Zfilm's own are always there). */
+export function libraryAdded() {
+  return addedIds(sharedPref(ADDED));
+}
+
+export function setLibraryAdded(/** @type {unknown} */ ids) {
+  const next = addedIds(ids);
+  setSharedPref(ADDED, next);
+  return next;
+}
+
+/** Ids the community's catalog has: its packs' and its things'. Kept while it cannot be read (offline: nothing lost). */
+function addedIds(/** @type {unknown} */ ids) {
+  if (!Array.isArray(ids)) return [];
+  const { packs, items } = communityCatalog();
+  if (!items.length) return [...new Set(ids.filter((id) => typeof id === 'string' && id.length < 300))];
+  const known = new Set([...packs.map((p) => p.id), ...items.map((it) => it.id)]);
+  return [...new Set(ids.filter((id) => typeof id === 'string' && known.has(id)))];
 }
 
 /** The voices as library/voices.json has them: the services (each with its voice-over models) and their voices. */
 export const libraryVoices = () => read('voices.json', { version: 1, providers: [], voices: [] });
+
+/**
+ * The voices with the pairs that speak a dialogue together (`pair`, its two `members`; doubao-dialogue.mjs): a pair's
+ * id is its two voices' ("a+b"), as `openfilm get tts --voice` takes it.
+ * @param {{ voices: object[] }} voices
+ */
+export function withPairs(voices) {
+  return { ...voices, voices: [...voices.voices, ...DOUBAO_PAIRS.map((p) => ({ provider: 'doubao', id: p.id, name: p.name, description: p.description,
+    gender: null, age: null, language: p.language, accent: null, tags: [], sample: p.sample, featured: true, uses: null, pair: true, members: p.members }))] };
+}
+
+/** Only an indexed public recording on the provider's own CDN, never an arbitrary URL supplied by the page. */
+function officialVoiceSample(/** @type {string} */ rel) {
+  if (!rel.startsWith('voices/doubao/')) return null;
+  const voice = /** @type {{ voices: { provider: string, sample?: string, sampleSource?: string }[] }} */ (libraryVoices()).voices.find((v) => v.provider === 'doubao' && v.sample === rel);
+  return typeof voice?.sampleSource === 'string' ? doubaoSampleUrl(voice.sampleSource) : null;
+}
 
 /** A voice's id among the starred things: `voice:<service>/<its id there>`. */
 export const voiceKey = (/** @type {{ provider: string, id: string }} */ v) => `voice:${v.provider}/${v.id}`;
@@ -316,6 +343,8 @@ function starrable() {
   return new Set([
     ...(/** @type {{ items: { id: string }[] }} */ (libraryIndex())).items.map((item) => item.id),
     ...(/** @type {{ voices: { provider: string, id: string }[] }} */ (libraryVoices())).voices.map(voiceKey),
+    ...ownVoiceKeys(),
+    ...(/** @type {{ packs: { id: string }[] }} */ (libraryIndex())).packs.map((p) => `pack:${p.id}`),
   ]);
 }
 
@@ -324,6 +353,16 @@ export function libraryFile(/** @type {unknown} */ rel) {
   if (typeof rel !== 'string' || !rel) return null;
   const file = located(rel);
   return file && statSync(file).isFile() ? file : null;
+}
+
+/**
+ * A Community sound or piece of music not here yet, sent to `res` as it is fetched (so a click is heard at once);
+ * false when it is to be served the usual way.
+ * @param {unknown} rel @param {import('node:http').ServerResponse} res
+ */
+export function streamLibrary(rel, res) {
+  if (typeof rel !== 'string' || !isCommunity(rel) || !SAFE_PLACE.test(rel) || rel.split('/').some((part) => part === '..' || part === '.')) return Promise.resolve(false);
+  return streamCommunity(libraryCache(), rel, res);
 }
 
 /** libraryFile, fetching it first when it is a published part not here yet (fetchLibrary). */
@@ -335,17 +374,22 @@ export async function libraryFileFetched(/** @type {unknown} */ rel) {
 /** Where the starred things are kept in the shared prefs.json. */
 const FAVORITES = 'libraryFavorites';
 
-/** The ids the person starred (a voice's is voiceKey's), in the order they were starred, those still in the library only. */
-export function libraryFavorites() {
-  const starred = sharedPref(FAVORITES);
-  const ids = starrable();
-  return Array.isArray(starred) ? [...new Set(starred.filter((id) => typeof id === 'string' && ids.has(id)))] : [];
+/** A file of the person's own library starred: by its identity there (asset-library.mjs), so it stays starred as it moves. */
+export const SAVED_STAR = /^saved:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Keep skill stars by UID so they survive going offline or moving between Installed and Discover. */
+function favoriteIds(/** @type {unknown} */ ids) {
+  if (!Array.isArray(ids)) return [];
+  const known = starrable();
+  return [...new Set(ids.filter((id) => typeof id === 'string' && (known.has(id) || SAVED_STAR.test(id) || (id.startsWith('skill:') && SKILL_UID.test(id.slice(6))))))];
 }
 
-/** Keep `ids` as the starred ones (those not in the library left out). Returns them as kept. */
+export function libraryFavorites() {
+  return favoriteIds(sharedPref(FAVORITES));
+}
+
 export function setLibraryFavorites(/** @type {unknown} */ ids) {
-  const known = starrable();
-  const next = Array.isArray(ids) ? [...new Set(ids.filter((id) => typeof id === 'string' && known.has(id)))] : [];
+  const next = favoriteIds(ids);
   setSharedPref(FAVORITES, next);
   return next;
 }

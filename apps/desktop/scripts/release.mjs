@@ -34,7 +34,7 @@
  * release pipeline.
  */
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -143,7 +143,8 @@ await builder.build({
   ...(win ? { win: ['nsis'] } : { mac: ['dmg', 'zip'] }),
   [arch]: true,
   config: {
-    afterPack: win ? (context) => windowsResources(context) : undefined,
+    /* the Mac app's asar integrity hash, written again from the archive that ships: see macAsarIntegrity */
+    afterPack: win ? (context) => windowsResources(context) : (context) => macAsarIntegrity(context),
     /* unsigned on a Mac: signed ad hoc, whole, before the .dmg and .zip are made. Electron's fuses are written into
        its framework after the linker signed it, and an Apple chip kills a program whose pages no longer match its
        signature ("Code Signature Invalid") the moment it starts */
@@ -155,6 +156,7 @@ await builder.build({
       artifactName: `${NAME.replace(' ', '-')}-Setup-\${arch}.\${ext}`,
     },
     nsis: {
+      include: join(desktop, 'build/installer.nsh'),
       /* electron-builder leaves these out of its archive and adds them back apart, skipping node_modules: the
          library's previews (node_modules/openfilm/library/.../preview.mp4) would never reach the computer */
       preCompressedFileExtensions: null,
@@ -169,6 +171,8 @@ await builder.build({
       artifactName: `${NAME.replace(' ', '-')}-Setup-\${arch}.\${ext}`,
     },
     appId: preview ? 'dev.zfilm.desktop.preview' : 'dev.zfilm.desktop',
+    /* openfilm:// links: a page of openfilm.dev opens the app on what it names (src/deep-links.mjs) */
+    protocols: [{ name: 'Zfilm', schemes: ['openfilm'] }],
     productName: NAME,
     copyright: 'Copyright © 2026 Zfilm',
     electronVersion,
@@ -230,6 +234,48 @@ if (!unsigned && !win && FEED) {
 console.log(`\n${readdirSync(out).filter((f) => /\.(dmg|zip|exe|yml)$/.test(f)).map((f) => join(out, f)).join('\n')}`);
 console.log(`feed: ${FEED ?? 'none (a build of this source: it never looks for updates)'}`);
 if (FEED && !existsSync(join(out, win ? 'latest.yml' : 'latest-mac.yml'))) process.exitCode = 1;
+
+/**
+ * The asar's integrity hash, as the app checks it at start (`enableEmbeddedAsarIntegrityValidation`): Electron hashes
+ * the archive's header — the JSON index in its first bytes — and compares it to this. What electron-builder writes can
+ * be the header before a later packing step rewrote it, and Electron then refuses to load the app: a dialog, nothing
+ * on stderr, no data folder. Written again here from the file that ships, before the app is signed (afterPack).
+ * @param {{ appOutDir: string }} context
+ */
+function macAsarIntegrity(context) {
+  const app = join(context.appOutDir, `${NAME}.app`);
+  const asar = join(app, 'Contents/Resources/app.asar');
+  const plist = join(app, 'Contents/Info.plist');
+  if (!existsSync(asar) || !existsSync(plist)) return;
+  const hash = asarHeaderHash(asar);
+  const json = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8' }));
+  const entry = json.ElectronAsarIntegrity?.['Resources/app.asar'];
+  if (!entry || entry.hash === hash) return;
+  entry.hash = hash;
+  const written = join(context.appOutDir, 'Info.plist.json');
+  writeFileSync(written, JSON.stringify(json));
+  try {
+    execFileSync('plutil', ['-convert', 'binary1', written, '-o', plist]);
+  } finally {
+    rmSync(written, { force: true });
+  }
+  console.log(`  \u2022 asar integrity hash rewritten from the packed archive (${hash.slice(0, 12)}\u2026)`);
+}
+
+/** The sha256 of an asar's header — its JSON index, by the pickle size at byte 12 — as Electron checks it. */
+function asarHeaderHash(file) {
+  const fd = openSync(file, 'r');
+  try {
+    const sizes = Buffer.alloc(16);
+    readSync(fd, sizes, 0, 16, 0);
+    const length = sizes.readUInt32LE(12);
+    const header = Buffer.alloc(length);
+    readSync(fd, header, 0, length, 16);
+    return createHash('sha256').update(header).digest('hex');
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /** An unsigned Mac app signed ad hoc (no identity), all of it, so it starts. @param {{ appOutDir: string }} context */
 function adHocSign(context) {

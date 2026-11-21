@@ -4,8 +4,8 @@
  * process's, so whatever breaks in them (a browser's pipe, a crash, memory running out) ends its renders and says why,
  * and Studio keeps serving.
  *
- * Told `{ args, opts }` once: one render, then it exits; says `progress`, then `done` (render's result) or `failed`;
- * `cancel` stops it. A render whose browser crashed or stopped answering is drawn once more in a new one.
+ * Told `{ args, opts }` once: one render, then it exits; says `progress` (and `software`, when its browser draws
+ * without a graphics chip), then `done` (render's result) or `failed`; `cancel` stops it. A render whose browser crashed or stopped answering is drawn once more in a new one.
  *
  * Started with `--pool` (an editing project's pages): told `{ type: 'render', id, args, opts }` for each render, at
  * any time, `{ type: 'cancel', id }` to stop one and `{ type: 'close' }` when no more come; says `progress`, `done`
@@ -32,6 +32,7 @@ if (process.argv.includes('--pool')) {
         try {
           const result = await render(args, {
             ...opts, signal, browsers: pool,
+            onEncoder: (/** @type {string} */ encoder) => { process.send?.({ type: 'encoder', id, encoder }); },
             onProgress: (/** @type {number} */ done, /** @type {number} */ total) => { process.send?.({ type: 'progress', id, done, total }); },
           });
           await say({ type: 'done', id, result });
@@ -71,17 +72,22 @@ if (process.argv.includes('--pool')) {
           result = await render(args, {
             ...opts, signal: abort.signal,
             onProgress: (/** @type {number} */ done, /** @type {number} */ total) => { process.send?.({ type: 'progress', done, total }); },
+            onSoftware: () => { process.send?.({ type: 'software' }); },
+            onEncoder: (/** @type {string} */ encoder) => { process.send?.({ type: 'encoder', encoder }); },
+            onPhase: (/** @type {string} */ phase) => { process.send?.({ type: 'phase', phase }); },
+            onAudioPhase: (/** @type {string | null} */ phase) => { process.send?.({ type: 'audioPhase', phase }); },
           });
           break;
         } catch (e) {
           if (tries > 1 || abort.signal.aborted || !browserFailed(e)) throw e;
+          process.send?.({ type: 'phase', phase: 'retrying' });
           process.stderr.write(`openfilm: ${e instanceof Error ? e.message.split('\n')[0] : e}: drawn again in a new browser\n`);
         }
       }
       await say({ type: 'done', result });
       process.exit(0);
     } catch (e) {
-      await say({ type: 'failed', error: e instanceof Error ? e.message : String(e) });
+      await say({ type: 'failed', error: e instanceof Error ? e.message : String(e), code: /** @type {{ code?: string }} */ (e)?.code });
       process.exit(1);
     }
   });

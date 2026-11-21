@@ -1,6 +1,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFolder, createProject, deleteProject, duplicateProject, forgetProject, listFolders, listProjects, locateProject, moveFolder, moveLibrary, moveProjectToFolder, openProject, projectById, renameProject, ProjectError } from './projects.mjs';
@@ -33,6 +34,38 @@ test('an existing film.html is never touched, and reopening keeps the id and mov
   assert.equal(again.id, first.id);
   assert.equal(readFileSync(join(folder, 'film.html'), 'utf8'), '{"stage":{"w":1080,"h":1920},"tracks":[]}');
   assert.deepEqual((await listProjects()).map((p) => p.name), ['agent-made', 'other']);
+});
+
+test('existing projects in an old installation stay accessible while new projects are refused there', async (t) => {
+  const installed = join(scratch, 'Zfilm');
+  const old = await openProject(join(installed, 'Old project'));
+  const before = readFileSync(join(old.path, 'film.html'), 'utf8');
+  const prior = process.env.OPENFILM_INSTALL_DIR;
+  process.env.OPENFILM_INSTALL_DIR = installed;
+  t.after(() => { if (prior === undefined) delete process.env.OPENFILM_INSTALL_DIR; else process.env.OPENFILM_INSTALL_DIR = prior; });
+  assert.equal((await openProject(old.path, { create: false })).id, old.id);
+  await assert.rejects(openProject(join(installed, 'New project')), /installation directory/);
+  assert.equal(existsSync(join(installed, 'New project')), false);
+  chooseFolder('projectsFolder', installed);
+  await assert.rejects(createProject('New project'), /installation directory/);
+  await assert.rejects(duplicateProject(old.id), /installation directory/);
+  assert.equal(readFileSync(join(old.path, 'film.html'), 'utf8'), before);
+});
+
+test('a damaged project index recovers the linked project and preserves the damaged index for recovery', async () => {
+  const external = await openProject(join(scratch, 'External project'));
+  const path = join(process.env.OPENFILM_HOME, 'studio.json');
+  const corrupted = '{"recent":[';
+  writeFileSync(path, corrupted);
+  assert.ok((await listProjects()).some(p => p.id === external.id));
+  const project = await createProject('New project');
+  assert.deepEqual((await listProjects()).map(p => p.id), [project.id, external.id]);
+  const oldIndex = readdirSync(process.env.OPENFILM_HOME).find(name => name.endsWith('.damaged'));
+  assert.equal(readFileSync(join(process.env.OPENFILM_HOME, oldIndex), 'utf8'), corrupted);
+  assert.ok(existsSync(join(external.path, 'film.html')));
+
+  rmSync(path);
+  assert.deepEqual((await listProjects()).map(p => p.id), [project.id, external.id]);
 });
 
 test('a copied folder brings its original id and gets its own', async () => {
@@ -160,6 +193,47 @@ test('renaming a project renames its folder; a taken name is refused', async () 
   assert.equal((await createProject('Two  spaces')).name, 'Two  spaces');
   /* the same name in another case is the same folder, not a taken one */
   if (existsSync(join(scratch, 'MY  FILM ✨ 日本'))) assert.equal((await renameProject(p.id, 'MY  FILM ✨ 日本')).name, 'MY  FILM ✨ 日本');
+});
+
+/** A process working in `folder` (an app's agent between turns), once it has started, until it is stopped. */
+async function workIn(/** @type {string} */ folder) {
+  const child = spawn(process.execPath, ['-e', 'process.stdout.write("up"); setInterval(() => {}, 1000)'], { cwd: folder, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  const ended = new Promise((done) => child.once('exit', done));
+  await new Promise((done) => child.stdout.once('data', done));
+  return { stop: () => { child.kill(); return ended; } };
+}
+
+test('a project an agent process works in is let go of first, then renamed', { skip: process.platform !== 'win32' && 'Windows refuses to rename a folder a process works in' }, async () => {
+  const p = await openProject(join(scratch, 'Untitled'));
+  const agent = await workIn(p.path);
+  /** @type {string[]} */
+  const released = [];
+  const renamed = await renameProject(p.id, 'My Film', { release: async (path) => { released.push(path); await agent.stop(); } });
+  assert.deepEqual(released, [p.path]);
+  assert.equal(renamed.name, 'My Film');
+  assert.ok(existsSync(join(scratch, 'My Film', 'film.html')) && !existsSync(join(scratch, 'Untitled')));
+});
+
+test('a project folder still held on Windows is refused as busy, and stays where it is', { skip: process.platform !== 'win32' && 'Windows refuses to rename a folder a process works in' }, async () => {
+  const p = await openProject(join(scratch, 'Untitled'));
+  const other = await workIn(p.path);
+  try {
+    await assert.rejects(renameProject(p.id, 'My Film'), (e) => e instanceof ProjectError && e.status === 409 && e.code === 'folder-busy' && /EBUSY/.test(e.message));
+    assert.equal((await projectById(p.id))?.path, p.path);
+    assert.ok(existsSync(join(p.path, 'film.html')) && !existsSync(join(scratch, 'My Film')));
+  } finally { await other.stop(); }
+  /* let go of: the same rename goes through */
+  assert.equal((await renameProject(p.id, 'My Film')).name, 'My Film');
+});
+
+test('a rename to the same name or a taken one lets go of nothing', async () => {
+  const p = await openProject(join(scratch, 'draft'));
+  await openProject(join(scratch, 'taken'));
+  let released = 0;
+  const release = () => { released++; };
+  await renameProject(p.id, 'draft', { release });
+  await assert.rejects(renameProject(p.id, 'taken', { release }), (e) => e instanceof ProjectError && e.status === 409);
+  assert.equal(released, 0);
 });
 
 test('forgetting a project leaves its folder; a deleted folder shows as missing', async () => {

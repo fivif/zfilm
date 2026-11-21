@@ -7,14 +7,14 @@
  * ffmpeg runs a few at a time: a project opened with fifty clips must not start fifty decoders. The editor's sound of
  * each file (soundOf) is made a few at a time of its own, so a long recording's does not hold up the thumbnails.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rename, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { audioClips, mix } from '../../src/shared.mjs';
-import { hasAlpha } from '../../src/seekable.mjs';
+import { audioClips, fileOf, knowAudioChannels, mix } from '../../src/shared.mjs';
+import { hasAlpha, keyFrameGap } from '../../src/seekable.mjs';
 import { readable } from './files.mjs';
 import { TOOL_DIR } from './projects.mjs';
 import { writeAtomic } from './atomic.mjs';
@@ -81,11 +81,10 @@ async function cached(/** @type {string} */ root, /** @type {string} */ kind, /*
  */
 export async function probe(root, rel) {
   const { abs, key } = await source(root, rel);
-  /* `.4`: since the size is as shown (an older answer has a turned video's sides as stored), with the codec, its
-     profile and level */
-  const bytes = await cached(root, 'probe', `${key}.4.json`, async () => {
+  const bytes = await cached(root, 'probe', `${key}.5.json`, async () => {
     const out = JSON.parse((await tool('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', abs])).toString());
-    const video = out.streams?.find((/** @type {{ codec_type: string }} */ s) => s.codec_type === 'video');
+    const video = out.streams?.find((/** @type {{ codec_type: string, disposition?: { attached_pic?: number } }} */ s) =>
+      s.codec_type === 'video' && !s.disposition?.attached_pic);
     const audio = out.streams?.some((/** @type {{ codec_type: string }} */ s) => s.codec_type === 'audio');
     const [n, d] = String(video?.avg_frame_rate ?? '0/1').split('/').map(Number);
     const duration = Number(out.format?.duration);
@@ -97,11 +96,23 @@ export async function probe(root, rel) {
       ...(d && n ? { fps: Math.round((n / d) * 100) / 100 } : {}),
       ...(video?.codec_name ? { codec: String(video.codec_name), pixfmt: String(video.pix_fmt ?? '') } : {}),
       ...(video?.profile ? { profile: String(video.profile) } : {}),
+      ...(video && hasAlpha(video) ? { alpha: true } : {}),
       ...(Number(video?.level) > 0 ? { level: Number(video.level) } : {}),
       audio: Boolean(audio),
     }));
   });
   return JSON.parse(bytes.toString());
+}
+
+/**
+ * How far apart a video's key frames are (s; null when it cannot tell): what a seek in it costs (src/seekable.mjs
+ * keyFrameGap). Kept with the file's probe.
+ * @param {string} root @param {string} rel @returns {Promise<number | null>}
+ */
+export async function keyGap(root, rel) {
+  const { abs, key } = await source(root, rel);
+  const bytes = await cached(root, 'probe', `${key}.gop.json`, async () => Buffer.from(JSON.stringify({ gap: await keyFrameGap(abs) })));
+  return JSON.parse(bytes.toString()).gap ?? null;
 }
 
 /**
@@ -141,8 +152,9 @@ const RATE = 8000;
 export async function waveform(root, rel) {
   const { abs, key } = await source(root, rel);
   const bytes = await cached(root, 'waves', `${key}.json`, async () => {
-    const pcm = await tool('ffmpeg', ['-v', 'error', '-i', abs, '-vn', '-ac', '1', '-ar', String(RATE), '-f', 's16le', '-']);
-    return Buffer.from(JSON.stringify(peaksOf(pcm)));
+    /* read as ffmpeg writes it: a two-hour recording is never held in memory whole */
+    const wave = await streamedPeaks(['-v', 'error', '-nostdin', '-i', abs, '-vn', '-ac', '1', '-ar', String(RATE), '-f', 's16le', '-']);
+    return Buffer.from(JSON.stringify(wave));
   });
   return JSON.parse(bytes.toString());
 }
@@ -171,7 +183,9 @@ export async function mixedWaveform(root, sounds, duration) {
       const pcm = join(scratch, 'mix.pcm');
       try {
         await mix(clips, duration, pcm, ['-ac', '1', '-ar', String(RATE), '-f', 's16le']);
-        return Buffer.from(JSON.stringify(peaksOf(await readFile(pcm))));
+        const peaks = peakCounter();
+        for await (const piece of createReadStream(pcm)) peaks.add(piece);
+        return Buffer.from(JSON.stringify(peaks.done()));
       } finally {
         await rm(scratch, { recursive: true, force: true });
       }
@@ -181,18 +195,106 @@ export async function mixedWaveform(root, sounds, duration) {
   return JSON.parse((await pending).toString());
 }
 
-/** Mono 16-bit samples at RATE → `{ duration (s), peaks }`. */
-function peaksOf(/** @type {Buffer} */ pcm) {
-  const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.length / 2));
-  const per = RATE / PEAKS_PER_SECOND;
-  const peaks = [];
-  for (let i = 0; i < samples.length; i += per) {
-    let max = 0;
-    const end = Math.min(samples.length, i + per);
-    for (let j = i; j < end; j++) { const v = Math.abs(samples[j]); if (v > max) max = v; }
-    peaks.push(Math.round((max / 32768) * 1000) / 1000);
+/** @type {Map<string, Promise<Buffer>>} */
+const measuringMixes = new Map();
+
+/**
+ * How loud the film's sound is as mixed (EBU R128): `{ lufs, peak }` of the sounds the preview plays, added together
+ * as a render adds them, before any loudness target or limiter (`lufs` null: silence). What the preview turns the
+ * mix by so it is heard at the loudness the film is delivered at. Kept by the sounds and their files' versions.
+ * @param {string} root @param {import('../../src/host.mjs').FilmSound[]} sounds @param {number} duration
+ * @returns {Promise<{ lufs: number | null, peak: number | null }>}
+ */
+export async function mixLoudness(root, sounds, duration) {
+  await knowAudioChannels(sounds.map((s) => { try { return fileOf(root, 'film.html', s.src); } catch { return ''; } }).filter(Boolean));
+  const clips = audioClips(root, 'film.html', sounds).filter((clip) => clip.at < duration && clip.volume > 0);
+  if (!clips.length) return { lufs: null, peak: null };
+  const versions = await Promise.all([...new Set(clips.map((clip) => clip.file))].map(async (file) => {
+    const info = await stat(file);
+    return [file, info.size, info.mtimeMs];
+  }));
+  const name = `mix-${createHash('sha256').update(JSON.stringify([duration, clips, versions])).digest('hex').slice(0, 24)}.json`;
+  const id = join(root, name);
+  let pending = measuringMixes.get(id);
+  if (!pending) {
+    pending = cached(root, 'loudness', name, async () => {
+      const scratch = await mkdtemp(join(tmpdir(), 'openfilm-mix-'));
+      const wav = join(scratch, 'mix.wav');
+      try {
+        /* 32-bit float: sounds added together pass full scale, and are measured as they are */
+        await mix(clips, duration, wav, ['-c:a', 'pcm_f32le']);
+        const log = (await tool('ffmpeg', ['-nostdin', '-hide_banner', '-nostats', '-i', wav, '-af', 'ebur128=peak=true', '-f', 'null', '-'], SLOTS, true)).toString();
+        return Buffer.from(JSON.stringify(loudnessOf(log)));
+      } finally {
+        await rm(scratch, { recursive: true, force: true });
+      }
+    }).finally(() => measuringMixes.delete(id));
+    measuringMixes.set(id, pending);
   }
-  return { duration: samples.length / RATE, peaks };
+  return JSON.parse((await pending).toString());
+}
+
+/**
+ * ffmpeg's mono 16-bit samples at RATE, made into `{ duration (s), peaks }` as they come out of it (peakCounter), in
+ * one of `slots`: any length of sound in the memory of one window of samples.
+ * @param {string[]} args @param {Slots} [slots]
+ * @returns {Promise<{ duration: number, peaks: number[] }>}
+ */
+async function streamedPeaks(args, slots = SLOTS) {
+  if (slots.busy >= slots.size) await new Promise((r) => slots.waiting.push(() => r(undefined)));
+  slots.busy++;
+  try {
+    return await new Promise((resolve, reject) => {
+      const child = spawn('ffmpeg', ['-hide_banner', ...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      const counter = peakCounter();
+      let err = '';
+      child.stdout.on('data', counter.add);
+      child.stderr.on('data', (/** @type {Buffer} */ d) => { err = (err + d.toString()).slice(-4000); });
+      child.on('error', (error) => reject(/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT'
+        ? new MediaError('ffmpeg is not installed (macOS: brew install ffmpeg · Debian/Ubuntu: sudo apt install ffmpeg · Windows: winget install ffmpeg)', 501)
+        : error));
+      child.on('close', (code) => {
+        if (code !== 0) return reject(new MediaError(err.trim().split('\n').pop() || `ffmpeg ended with ${code}`));
+        resolve(counter.done());
+      });
+    });
+  } finally {
+    slots.busy--;
+    slots.waiting.shift()?.();
+  }
+}
+
+/**
+ * Mono 16-bit samples at RATE, taken a piece at a time (`add`) → `{ duration (s), peaks }` (`done`): the loudest
+ * sample of each 1/PEAKS_PER_SECOND s, between 0 and 1. A piece may end inside a sample: its byte waits for the next.
+ */
+export function peakCounter() {
+  const per = RATE / PEAKS_PER_SECOND;
+  /** @type {number[]} */
+  const peaks = [];
+  let max = 0;
+  let inWindow = 0;
+  let count = 0;
+  /** @type {Buffer | null} */
+  let half = null;
+  const peak = () => peaks.push(Math.round((max / 32768) * 1000) / 1000);
+  return {
+    add: (/** @type {Buffer} */ piece) => {
+      const bytes = half ? Buffer.concat([half, piece]) : piece;
+      const n = bytes.length >> 1;
+      half = bytes.length & 1 ? bytes.subarray(bytes.length - 1) : null;
+      for (let i = 0; i < n; i++) {
+        const v = Math.abs(bytes.readInt16LE(i * 2));
+        if (v > max) max = v;
+        if (++inWindow === per) { peak(); max = 0; inWindow = 0; }
+      }
+      count += n;
+    },
+    done: () => {
+      if (inWindow) peak();
+      return { duration: count / RATE, peaks };
+    },
+  };
 }
 
 /** Sound files small and compressed enough to be played as they are. */

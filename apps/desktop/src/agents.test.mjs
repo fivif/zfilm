@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession, CLIENT_CAPABILITIES, INSTRUCTIONS, agentDefaults, agentInstructions, closeEverySession, planProblem, probeFolder, CODEX_UTF8_CMD, agentShell, allowOption, codexDeveloperInstructions, codexLaunchEnv, codexSessionConfig, distinctOptions, errorCause, legacyOptions, optionsForModel, powerShellScript, powerShellLine, powerShellWindowLaunch, terminalScript, checkAgentProgram, readAgentStatus, setChosenPaths, signInScript, turnError, signInError, codexTooOld, ANTIGRAVITY_TESTED, antigravityTooOld, AGENTS, ownSignIn, codexServiceError, codexRefusal, codexNotice, explainFailure, stderrReason, withToolKind, OWN_GROUP, stopTree, winArg, CLAUDE_TESTED, claudeOutdated } from './agents.mjs';
+import { AgentSession, CLIENT_CAPABILITIES, INSTRUCTIONS, agentDefaults, agentInstructions, closeEverySession, planProblem, probeFolder, CODEX_UTF8_CMD, agentShell, allowOption, codexDeveloperInstructions, codexLaunchEnv, codexSessionConfig, distinctOptions, errorCause, legacyOptions, optionsForModel, powerShellScript, powerShellLine, powerShellWindowLaunch, terminalScript, checkAgentProgram, readAgentStatus, setChosenPaths, signInScript, turnError, signInError, codexTooOld, ANTIGRAVITY_TESTED, antigravityTooOld, AGENTS, ownSignIn, codexServiceError, codexRefusal, codexNotice, explainFailure, stderrReason, withToolKind, OWN_GROUP, stopTree, winArg, CLAUDE_TESTED, claudeOutdated, keyFileRules, PATH_KEPT } from './agents.mjs';
 import { spawn } from 'node:child_process';
 import { acpSignedIn, signOutAgent } from './agents.mjs';
 import { openfilmCommand } from './openfilm-command.mjs';
@@ -177,7 +177,7 @@ test('Codex is signed in in Codex: one found is never signed out here, and keeps
   assert.deepEqual(ownSignIn(AGENTS.claude, { signedIn: false, account: null }), { signedIn: false, account: null });
 });
 
-test("the model service's refusal Codex sends as its reply fails the turn; a model this Codex is too old for says to update it", () => {
+test("a model refusal fails the turn and names the selected CLI without assuming it is outdated", () => {
   const chunk = (text) => ({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
   const said = `{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."}}\n\n`;
   const refused = codexServiceError(chunk(said));
@@ -188,9 +188,9 @@ test("the model service's refusal Codex sends as its reply fails the turn; a mod
   assert.equal(codexServiceError({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: said } }), null);
 
   const old = codexRefusal(refused, '/usr/local/bin/codex', () => '0.156.1');
-  assert.equal(old.code, 'outdated');
-  assert.equal(old.message, "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account. Update Codex (this one is 0.156.1), or choose another model.");
-  assert.match(codexRefusal(refused, '/usr/local/bin/codex', () => null).message, / Update Codex, or choose another model\.$/);
+  assert.equal(old.code, 'unsupported-model');
+  assert.equal(old.message, "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account. Selected Codex CLI: 0.156.1. Choose another model or check for a Codex update.");
+  assert.match(codexRefusal(refused, '/usr/local/bin/codex', () => null).message, / Choose another model or check for a Codex update\.$/);
   const other = codexRefusal({ message: 'Rate limit reached.', status: 429 }, '/usr/local/bin/codex', () => '0.163.0');
   assert.equal(other.message, 'Rate limit reached.');
   assert.equal(other.code, undefined);
@@ -223,15 +223,18 @@ test("the person's own developer_instructions in Codex's config, read as TOML wr
 });
 
 test("an agent is told to run the app's openfilm by its whole path: its shell may find another one first on the PATH", () => {
-  const command = openfilmCommand('/Users/me/Library/Application Support/OpenFilm/bin', 'darwin');
-  assert.equal(command, "'/Users/me/Library/Application Support/OpenFilm/bin/openfilm'", 'quoted, for the space in it');
+  const command = openfilmCommand('/Users/me/Library/Application Support/Zfilm/bin', 'darwin');
+  assert.equal(command, "'/Users/me/Library/Application Support/Zfilm/bin/openfilm'", 'quoted, for the space in it');
   const told = agentInstructions(command);
-  for (const run of [`\`${command}\` with no arguments`, `\`${command} open\``, `\`${command} look\``]) assert.ok(told.includes(run), run);
-  assert.match(told, /not as `openfilm` \(your shell may find another one first\)/);
+  assert.ok(told.includes(`run \`${command}\` with no arguments`));
+  assert.match(told, /run every Zfilm command by it, also where a skill says `openfilm`,\nas your shell may find another one first/);
   assert.ok(!told.includes('on your PATH'));
-  assert.equal(openfilmCommand('C:\\Users\\me\\AppData\\Roaming\\OpenFilm\\bin', 'win32'), null, 'on Windows the name on the PATH');
+  assert.equal(openfilmCommand('C:\\Users\\me\\AppData\\Roaming\\Zfilm\\bin', 'win32'), null, 'on Windows the name on the PATH');
   assert.equal(agentInstructions(null), INSTRUCTIONS);
-  assert.match(INSTRUCTIONS, /Use the `openfilm` command on your PATH/);
+  assert.match(INSTRUCTIONS, /run `openfilm` with no arguments/);
+  assert.match(INSTRUCTIONS, /The `openfilm` on your PATH is this app's own/);
+  /* by its name to the agents whose PATH the app keeps: its own, Claude Code (CLAUDE_ENV_FILE), Codex (its config) */
+  assert.deepEqual([...PATH_KEPT].sort(), ['byok', 'claude', 'codex', 'openfilm']);
 });
 
 test("Codex keeps the session's PATH for each command, the app's openfilm first, after the person's own instructions", () => {
@@ -274,12 +277,12 @@ test("a sign-in in Terminal runs in a folder of the app's own, not the home fold
 });
 
 test('a Windows sign-in is a PowerShell script: each path whole however it is spelled, read as UTF-8', () => {
-  const script = powerShellScript('Claude Code sign-in', 'C:\\Program Files\\OpenFilm\\OpenFilm.exe',
-    ['C:\\Program Files\\OpenFilm\\app.asar\\src\\as-node.mjs', 'D:\\用户\\it\'s\\index.js', '--cli', 'auth', 'login', '--claudeai']);
+  const script = powerShellScript('Claude Code sign-in', 'C:\\Program Files\\Zfilm\\Zfilm.exe',
+    ['C:\\Program Files\\Zfilm\\app.asar\\src\\as-node.mjs', 'D:\\用户\\it\'s\\index.js', '--cli', 'auth', 'login', '--claudeai']);
   assert.ok(script.startsWith('\ufeff'), 'a BOM: Windows PowerShell reads it as UTF-8');
   const lines = script.slice(1).split('\r\n');
   assert.equal(lines[0], "$Host.UI.RawUI.WindowTitle = 'Claude Code sign-in'");
-  assert.equal(lines[1], "& 'C:\\Program Files\\OpenFilm\\OpenFilm.exe' 'C:\\Program Files\\OpenFilm\\app.asar\\src\\as-node.mjs' "
+  assert.equal(lines[1], "& 'C:\\Program Files\\Zfilm\\Zfilm.exe' 'C:\\Program Files\\Zfilm\\app.asar\\src\\as-node.mjs' "
     + "'D:\\用户\\it''s\\index.js' '--cli' 'auth' 'login' '--claudeai'");
 });
 
@@ -506,7 +509,7 @@ test('a Codex older than the ones tried, that did not start, is said to need an 
   const failed = new Error('Pending response rejected since connection got disposed');
   const old = codexTooOld('codex', '/usr/local/bin/codex', failed, () => '0.104.0');
   assert.equal(old.code, 'outdated');
-  assert.match(old.message, /^Codex 0\.104\.0 is older than OpenFilm needs \(0\.132\.0 or later\): update Codex, then try again\. Pending response/);
+  assert.match(old.message, /^Codex 0\.104\.0 is older than Zfilm needs \(0\.132\.0 or later\): update Codex, then try again\. Pending response/);
   assert.equal(codexTooOld('codex', '/usr/local/bin/codex', failed, () => '0.163.0'), failed);
   assert.equal(codexTooOld('codex', '/usr/local/bin/codex', failed, () => null), failed, 'a version it cannot tell');
   const signIn = Object.assign(new Error('Codex is not signed in.'), { code: 'sign-in' });
@@ -518,7 +521,7 @@ test('an Antigravity older than 1.5.1, that did not start, is said to need an up
   const failed = new Error('Process exited with code 2');
   const old = antigravityTooOld('antigravity', '/usr/local/bin/agy', failed, () => '1.4.2');
   assert.equal(old.code, 'outdated');
-  assert.match(old.message, /^Google Antigravity 1\.4\.2 is older than OpenFilm needs \(1\.5\.1 or later\): update agy, then try again\./);
+  assert.match(old.message, /^Google Antigravity 1\.4\.2 is older than Zfilm needs \(1\.5\.1 or later\): update agy, then try again\./);
   assert.equal(antigravityTooOld('antigravity', '/usr/local/bin/agy', failed, () => '1.5.0').code, 'outdated');
   assert.equal(antigravityTooOld('antigravity', '/usr/local/bin/agy', failed, () => '1.5.1'), failed);
   assert.equal(antigravityTooOld('antigravity', '/usr/local/bin/agy', failed, () => '1.5.3'), failed);
@@ -740,4 +743,89 @@ test('a Claude Code older than the one the chat was tried with is said, with how
   assert.equal(claudeOutdated('/x/claude', at(CLAUDE_TESTED)), null);
   assert.equal(claudeOutdated('/x/claude', at('2.2.0')), null);
   assert.equal(claudeOutdated('/x/claude', at(null)), null);
+});
+
+test("Claude Code is told not to read Studio's key files, in every home it may find them; on Windows by its drive", () => {
+  assert.deepEqual(keyFileRules(['/srv/me/.openfilm-dev', '/srv/me/.openfilm', undefined, '/srv/me/.openfilm'], 'darwin'), [
+    'Read(//srv/me/.openfilm-dev/providers.json)', 'Read(//srv/me/.openfilm-dev/key)', 'Read(//srv/me/.openfilm-dev/run.json)',
+    'Read(//srv/me/.openfilm/providers.json)', 'Read(//srv/me/.openfilm/key)', 'Read(//srv/me/.openfilm/run.json)',
+  ]);
+  assert.equal(keyFileRules(['D:\\me\\.openfilm'], 'win32')[0], 'Read(//d/me/.openfilm/providers.json)');
+});
+
+test("a session to forget is deleted from the agent's history as it closes; the person's own conversation is kept", async () => {
+  const { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'of-forget-'));
+  const heard = join(dir, 'heard');
+  /* a Qwen Code that can delete a session (sessionCapabilities.delete), or not, and writes down what it is asked */
+  const fake = (deletes) => {
+    const program = join(dir, `qwen-${deletes}.mjs`);
+    writeFileSync(program, `import { appendFileSync } from 'node:fs';
+let buf = '';
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+process.stdin.on('data', (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
+    if (m.method === 'session/delete') appendFileSync(${JSON.stringify(heard)}, 'delete ' + m.params.sessionId + '\\n');
+    if (m.method === 'initialize') send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: ${deletes} ? { delete: {} } : {} }, authMethods: [] } });
+    else if (m.method === 'session/new') send({ jsonrpc: '2.0', id: m.id, result: { sessionId: 's1' } });
+    else if (m.id !== undefined) send({ jsonrpc: '2.0', id: m.id, result: {} });
+  }
+});
+setInterval(() => {}, 1000);
+`);
+    return program;
+  };
+  const run = async (program, opts) => {
+    setChosenPaths({ qwen: program });
+    const session = new AgentSession({ agent: 'qwen', cwd: dir, ...opts });
+    await session.start();
+    session.close();
+    await session.ended();
+  };
+  const said = () => (existsSync(heard) ? readFileSync(heard, 'utf8') : '');
+  try {
+    await run(fake(true), {});
+    assert.equal(said(), '', "the person's conversation stays in the agent's history");
+    await run(fake(true), { forget: true });
+    assert.equal(said(), 'delete s1\n');
+    rmSync(heard, { force: true });
+    await run(fake(false), { forget: true });
+    assert.equal(said(), '', 'an agent that cannot delete a session is not asked to');
+    setChosenPaths({ qwen: fake(true) });
+    const quitting = new AgentSession({ agent: 'qwen', cwd: dir, forget: true });
+    await quitting.start();
+    closeEverySession();
+    await quitting.ended();
+    assert.equal(said(), '', 'the app quitting ends it at once');
+  } finally { setChosenPaths({}); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("connectors' MCP servers go to the ACP session: programs always, remote ones when the agent takes them", async () => {
+  const { acpServers } = await import('./agents.mjs');
+  const servers = [{ name: 'notion', type: 'http', url: 'https://mcp.notion.com/mcp', headers: { 'X-A': 'b' } }, { name: 'local', type: 'stdio', command: 'npx', args: ['x'], env: { K: 'v' } }];
+  assert.deepEqual(acpServers(servers, { http: true }), [
+    { type: 'http', name: 'notion', url: 'https://mcp.notion.com/mcp', headers: [{ name: 'X-A', value: 'b' }] },
+    { name: 'local', command: 'npx', args: ['x'], env: [{ name: 'K', value: 'v' }] },
+  ]);
+  assert.deepEqual(acpServers(servers, undefined).map((s) => s.name), ['local'], 'an agent that takes no remote server');
+  assert.deepEqual(acpServers([], { http: true }), []);
+});
+
+test('a connector\'s tool call is named by its service in the chat, whatever agent made it', async () => {
+  const { withConnectorTitle } = await import('./agents.mjs');
+  const given = [{ name: 'notion', title: 'Notion' }, { name: 'frameio', title: 'Frame.io' }];
+  const call = (title) => withConnectorTitle({ sessionUpdate: 'tool_call', toolCallId: '1', title }, given).title;
+  assert.equal(call('mcp__notion__search'), 'Notion · search');
+  assert.equal(call('notion.create-page'), 'Notion · create-page');
+  assert.equal(call('mcp.notion.search'), 'Notion · search', 'as Codex names it');
+  assert.equal(call('frameio_comments'), 'Frame.io · comments');
+  assert.equal(call('Terminal'), 'Terminal', 'any other call as it was');
+  assert.equal(withConnectorTitle({ sessionUpdate: 'agent_message_chunk' }, given).title, undefined);
+  assert.equal(call.length, 1);
+  assert.deepEqual(withConnectorTitle({ sessionUpdate: 'tool_call', title: 'mcp__notion__search' }, []), { sessionUpdate: 'tool_call', title: 'mcp__notion__search' });
 });

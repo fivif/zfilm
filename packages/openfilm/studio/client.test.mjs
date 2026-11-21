@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentName, ensureStudio, olderThanThis, openInStudio, updateOpenfilm } from './client.mjs';
+import { agentName, canvasBy, ensureStudio, olderThanThis, openInStudio, updateOpenfilm } from './client.mjs';
 
 /* Studio's port, and the film's next to it, both free. They are below the range every system hands out on its own
    (Linux from 32768, macOS and Windows from 49152), so no connection or other server takes them while one Studio
@@ -121,21 +121,18 @@ test('`openfilm open` never makes the current folder a project unasked, nor a co
   }
 });
 
-test('a newer openfilm on npm is told from what was learnt (no network when not asked), never an older one', async () => {
+test('no newer openfilm is ever told: this build updates only when a new one is installed over it', async () => {
   const { newerOpenfilm } = await import('./client.mjs');
   const home = mkdtempSync(join(tmpdir(), 'of-update-'));
-  const was = process.env.OPENFILM_HOME, wasOff = process.env.OPENFILM_NO_UPDATE_CHECK;
+  const was = process.env.OPENFILM_HOME;
   process.env.OPENFILM_HOME = home;
-  /* the check itself is what is tested: whoever runs the tests may have it turned off */
-  delete process.env.OPENFILM_NO_UPDATE_CHECK;
   try {
+    /* what npm says is not read, and a file left by another build is not believed either */
     writeFileSync(join(home, 'update.json'), JSON.stringify({ checkedAt: Date.now(), latest: '99.0.0' }));
-    assert.equal(await newerOpenfilm({ network: false }), '99.0.0');
-    writeFileSync(join(home, 'update.json'), JSON.stringify({ checkedAt: Date.now(), latest: '0.0.1' }));
     assert.equal(await newerOpenfilm({ network: false }), null);
+    assert.equal(await newerOpenfilm({ network: true, force: true }), null, 'no registry request is made');
   } finally {
     if (was === undefined) delete process.env.OPENFILM_HOME; else process.env.OPENFILM_HOME = was;
-    if (wasOff !== undefined) process.env.OPENFILM_NO_UPDATE_CHECK = wasOff;
   }
 });
 
@@ -143,6 +140,13 @@ test('`openfilm update` in a source checkout says git pull updates it, and touch
   const said = await updateOpenfilm();
   assert.equal(said.ok, true);
   assert.match(said.lines[0], /source checkout: git pull updates it/);
+});
+
+test('what an agent puts on the canvas is marked with its name and its conversation; nothing outside an agent', () => {
+  assert.deepEqual(canvasBy({ OPENFILM_AGENT: 'app:c1', OPENFILM_AGENT_NAME: 'Claude Code' }), { agent: 'Claude Code', session: 'c1' });
+  assert.deepEqual(canvasBy({ OPENFILM_AGENT: 'app:c1', OPENFILM_AGENT_NAME: 'Codex', OPENFILM_SESSION: 's9' }), { agent: 'Codex', session: 's9' });
+  assert.deepEqual(canvasBy({ OPENFILM_AGENT: 'Mine' }), { agent: 'Mine' }, 'another program that says who it is');
+  assert.equal(canvasBy({}), undefined);
 });
 
 test('the agent running a command: the desktop app\'s by OPENFILM_AGENT, else the program past the shells that ran it', () => {

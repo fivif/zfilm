@@ -428,7 +428,7 @@ function SentBlocks({ blocks, t }: { blocks: Item[]; t: T }) {
   );
 }
 
-/** How a session's skills and MCP servers were set (agent-skills.mjs `log`): OpenFilm's, and the person's own hidden or let in. */
+/** How a session's skills and MCP servers were set (agent-skills.mjs `log`): Zfilm's, and the person's own hidden or let in. */
 function skillsLines(skills: Item, t: T): string[] {
   const list = (v: unknown) => (Array.isArray(v) && v.length ? v.join(', ') : '—');
   return [

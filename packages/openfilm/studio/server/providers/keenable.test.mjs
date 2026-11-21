@@ -31,7 +31,7 @@ test('with no key, each query is one search on the public endpoint, the app name
   const search = seen.at(-1);
   assert.equal(search.method, 'POST');
   assert.equal(search.url.pathname, '/v1/search/public');
-  assert.equal(search.headers['x-keenable-title'], 'OpenFilm');
+  assert.equal(search.headers['x-keenable-title'], 'Zfilm');
   assert.equal(search.headers['x-api-key'], undefined);
   assert.deepEqual(search.body, { query: 'gsap', max_results: 8 });
   assert.deepEqual(one.receipt, { provider: 'keenable', query: 'gsap', hits: [{ title: 'GSAP Docs', url: 'https://gsap.com/docs', excerpt: '# Timelines Sequence tweens.' }] });
@@ -47,7 +47,7 @@ test('with a key, the keyed endpoint, the key in X-API-Key, billed to it', async
   const search = seen.at(-1);
   assert.equal(search.url.pathname, '/v1/search');
   assert.equal(search.headers['x-api-key'], KEY);
-  assert.equal(search.headers['x-keenable-title'], 'OpenFilm');
+  assert.equal(search.headers['x-keenable-title'], 'Zfilm');
   assert.deepEqual(result.receipt, { provider: 'keenable', query: 'blender', hits: [] });
   assert.deepEqual(result.cost, { note: 'billed by Keenable to your key' });
 });
@@ -65,7 +65,7 @@ test('pages read by Keenable as Markdown, one request each; the ones it could no
   assert.deepEqual(seen.map((c) => [c.method, c.url.pathname, c.url.searchParams.get('url')]).sort(), [
     ['GET', '/v1/fetch/public', 'https://gsap.com/docs'], ['GET', '/v1/fetch/public', 'https://x.com/a'], ['GET', '/v1/fetch/public', 'https://y.com/empty'],
   ]);
-  assert.ok(seen.every((c) => c.headers['x-keenable-title'] === 'OpenFilm' && !c.headers['x-api-key']));
+  assert.ok(seen.every((c) => c.headers['x-keenable-title'] === 'Zfilm' && !c.headers['x-api-key']));
   assert.equal(result.files.length, 1);
   assert.match(Buffer.from(result.files[0].bytes).toString(), /<!-- source: https:\/\/gsap\.com\/docs -->[\s\S]*# GSAP\n\nAnimate anything\.\n$/);
   assert.equal(result.receipt.pages[0].title, 'GSAP');
